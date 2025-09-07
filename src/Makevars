@@ -1,0 +1,8 @@
+CXX_STD = CXX17
+
+# Portable OpenMP flags (empty on platforms without OpenMP)
+PKG_CFLAGS   = 
+PKG_CPPFLAGS  = 
+
+PKG_CXXFLAGS = $(SHLIB_OPENMP_CXXFLAGS)
+PKG_LIBS     = $(SHLIB_OPENMP_CXXFLAGS)

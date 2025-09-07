@@ -1,0 +1,28 @@
+Package: bgns
+Title: BGNS: Biweight Graph and Network Statistics
+Version: 0.1.0
+Authors@R: c(
+    person(given = "Aditya", family = "Kshirsagar", email = "adityag3vtp@gmail.com", role = c("aut", "cre"))
+ )
+Description: Robust biweight midcorrelation (bicor) kernels with NA-aware
+    pairwise handling, plus KNN/graph construction and clustering wrappers
+    compatible with tgstat graph utilities. The C++ core uses a strict
+    pairwise formulation with an optimized BLAS fast path on NA-free data,
+    yielding robust, outlier-resistant similarity graphs at scale.
+Depends:
+    R (>= 4.0)
+Imports:
+    tgstat,
+    Matrix
+Suggests:
+    knitr,
+    rmarkdown
+License: GPL-3
+Encoding: UTF-8
+RoxygenNote: 7.3.2
+SystemRequirements: C++17, OpenMP (optional)
+BugReports: https://github.com/metaddict/bgns/issues
+URL: https://github.com/metaddict/bgns
+Roxygen: list(markdown = TRUE)
+LazyLoad: no
+ByteCompile: no
