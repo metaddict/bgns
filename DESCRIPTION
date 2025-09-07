@@ -17,7 +17,7 @@ Imports:
 Suggests:
     knitr,
     rmarkdown
-License: GPL-3
+License: License: MIT + file LICENSE
 Encoding: UTF-8
 RoxygenNote: 7.3.2
 SystemRequirements: C++17, OpenMP (optional)
