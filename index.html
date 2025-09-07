@@ -65,7 +65,80 @@
 <div class="section level1">
 <div class="page-header"><h1 id="bgns-biweight-graph-and-network-statistics">BGNS: Biweight Graph and Network Statistics<a class="anchor" aria-label="anchor" href="#bgns-biweight-graph-and-network-statistics"></a>
 </h1></div>
-<p>Robust biweight midcorrelation (bicor) kernels with a C++ core that supports NA-aware pairwise handling, along with KNN/graph construction and clustering wrappers.</p>
+<p>The <strong>bgns</strong> package provides robust statistical methods for correlation analysis designed for graph construction, and network clustering. It implements biweight midcorrelation (bicor), a robust alternative for correlation that is more resistant to outliers.</p>
+<div class="section level2">
+<h2 id="package-overview">Package Overview<a class="anchor" aria-label="anchor" href="#package-overview"></a>
+</h2>
+</div>
+<div class="section level2">
+<h2 id="robust-biweight-midcorrelation-bicor-kernels-with-a-c-core-that-supports-na-aware-pairwise-handling">Robust biweight midcorrelation (bicor) kernels with a C++ core that supports NA-aware pairwise handling.<a class="anchor" aria-label="anchor" href="#robust-biweight-midcorrelation-bicor-kernels-with-a-c-core-that-supports-na-aware-pairwise-handling"></a>
+</h2>
+</div>
+<div class="section level2">
+<h2 id="key-capabilities">Key Capabilities<a class="anchor" aria-label="anchor" href="#key-capabilities"></a>
+</h2>
+<div class="section level3">
+<h3 id="robust-correlation-analysis">Robust Correlation Analysis<a class="anchor" aria-label="anchor" href="#robust-correlation-analysis"></a>
+</h3>
+<ul>
+<li>
+<strong>Biweight midcorrelation (bicor):</strong> Uses median-based robust statistics instead of mean-based methods<br>
+</li>
+<li>
+<strong>NA-aware handling:</strong> Efficient missing data handling with pairwise complete observations<br>
+</li>
+<li>
+<strong>High performance:</strong> C++17 core with optimized BLAS paths and optional OpenMP support</li>
+</ul>
+</div>
+<div class="section level3">
+<h3 id="graph-and-network-analysis">Graph and Network Analysis<a class="anchor" aria-label="anchor" href="#graph-and-network-analysis"></a>
+</h3>
+<ul>
+<li>
+<strong>tgstat integration:</strong> Compatible with tgstat graph utilities for extended analysis<br>
+</li>
+<li>
+<strong>KNN graph construction:</strong> Builds K-nearest neighbor graphs from bicor similarities<br>
+</li>
+<li>
+<strong>Graph clustering:</strong> Implements clustering algorithms on similarity graphs<br>
+</li>
+<li>
+<strong>Ensemble methods:</strong> Bootstrap resampling for robust clustering results</li>
+</ul>
+<hr>
+</div>
+</div>
+<div class="section level2">
+<h2 id="technical-features">Technical Features<a class="anchor" aria-label="anchor" href="#technical-features"></a>
+</h2>
+<ul>
+<li>Supports both dense matrices and sparse <code>Matrix</code> formats<br>
+</li>
+<li>Flexible output formats (matrix or tidy <code>data.frame</code>)<br>
+</li>
+<li>Memory-efficient algorithms for large datasets<br>
+</li>
+<li>Multiple normalization options including intersection-based denominators</li>
+</ul>
+<hr>
+</div>
+<div class="section level2">
+<h2 id="use-cases">Use Cases<a class="anchor" aria-label="anchor" href="#use-cases"></a>
+</h2>
+<p>This package is particularly valuable for: - Genomics and bioinformatics (gene expression analysis)<br>
+- Network biology (co-expression networks)<br>
+- Social network analysis with noisy data<br>
+- Any domain requiring robust correlation analysis with subsequent graph/network analysis</p>
+<hr>
+</div>
+<div class="section level2">
+<h2 id="installation">Installation<a class="anchor" aria-label="anchor" href="#installation"></a>
+</h2>
+<p>You can install the development version of <strong>bgns</strong> from GitHub:</p>
+<p>```r # install.packages(“devtools”) devtools::install_github(“metaddict/bgns”)</p>
+</div>
 </div>
   </div>
 
