@@ -4,3 +4,15 @@ __pycache__/
 .env
 .Rhistory
 .Rproj.user
+
+# build artifacts
+src/*.o
+src/*.so
+
+# R junk
+.Rproj.user/
+.Rhistory
+.RData
+*.Rproj
+src/*.dll
+src/*.dylib
