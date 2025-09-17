@@ -15,14 +15,13 @@ Robust biweight midcorrelation (bicor) kernels with a C++ core that supports NA-
 - **High performance:** C++17 core with optimized BLAS paths and optional OpenMP support  
 
 ### Graph and Network Analysis
-- **tgstat integration:** Compatible with tgstat graph utilities for extended analysis  
 - **KNN graph construction:** Builds K-nearest neighbor graphs from bicor similarities  
-- **Graph clustering:** Implements clustering algorithms on similarity graphs  
-- **Ensemble methods:** Bootstrap resampling for robust clustering results  
+- **Graph clustering:** Useful for bootstrap resampling for robust clustering results and clustering algorithms on similarity graphs.
 
 ---
 
 ## Technical Features
+- Compatible with tgstat graph utilities for extended analysis  
 - Supports both dense matrices and sparse `Matrix` formats  
 - Flexible output formats (matrix or tidy `data.frame`)  
 - Memory-efficient algorithms for large datasets  
@@ -41,7 +40,7 @@ This package is particularly valuable for:
 
 ## Installation
 
-You can install the development version of **bgns** from GitHub:
+The development version of **bgns** from GitHub:
 
 ```r
 # install.packages("devtools")
