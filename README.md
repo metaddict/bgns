@@ -4,7 +4,7 @@ The **bgns** package provides robust statistical methods for correlation analysi
 
 ## Package Overview
 
-Robust biweight midcorrelation (bicor) kernels with a C++ core that supports NA-aware pairwise handling.
+Robust biweight midcorrelation (bicor) that supports NA-aware pairwise handling.
 ---
 
 ## Key Capabilities
@@ -12,7 +12,7 @@ Robust biweight midcorrelation (bicor) kernels with a C++ core that supports NA-
 ### Robust Correlation Analysis
 - **Biweight midcorrelation (bicor):** Uses median-based robust statistics instead of mean-based methods  
 - **NA-aware handling:** Efficient missing data handling with pairwise complete observations  
-- **High performance:** C++17 core with optimized BLAS paths and optional OpenMP support  
+- **High performance:** C++ core with optimized BLAS paths and optional OpenMP support  
 
 ### Graph and Network Analysis
 - **KNN graph construction:** Builds K-nearest neighbor graphs from bicor similarities  
