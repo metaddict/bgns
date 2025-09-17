@@ -207,139 +207,139 @@ bicor_knn <- function(
   }
 }
 
-#' Bicor-based graph construction
-#' @param x numeric matrix (rows = observations, columns = items)
-#' @param knn K nearest neighbors
-#' @param k_expand expansion factor used by tgstat's graph builder
-#' @param k_beta numeric (default 3); passed to tgstat if applicable
-#' @param use_intersection_denominator logical; passed to bicor()
-#' @return graph object created by tgstat
-#' @export
-bicor_graph <- function(
-  x,
-  knn,
-  k_expand,
-  k_beta = 3,
-  use_intersection_denominator = FALSE
-) {
-  if (missing(x) || missing(knn) || missing(k_expand)) {
-    stop("Usage: bicor_graph(x, knn, k_expand, k_beta = 3)", call. = FALSE)
-  }
-  x <- .coerce_dense(x)
-  S <- bicor(
-    x,
-    pairwise.complete.obs = TRUE,
-    use_intersection_denominator = use_intersection_denominator
-  )
-  .Call(
-    "tgs_cor_graph",
-    S,
-    as.integer(knn),
-    as.integer(k_expand),
-    as.numeric(k_beta),
-    new.env(parent = parent.frame()),
-    PACKAGE = "tgstat"
-  )
-}
+# #' Bicor-based graph construction
+# #' @param x numeric matrix (rows = observations, columns = items)
+# #' @param knn K nearest neighbors
+# #' @param k_expand expansion factor used by tgstat's graph builder
+# #' @param k_beta numeric (default 3); passed to tgstat if applicable
+# #' @param use_intersection_denominator logical; passed to bicor()
+# #' @return graph object created by tgstat
+# #' @export
+# bicor_graph <- function(
+#   x,
+#   knn,
+#   k_expand,
+#   k_beta = 3,
+#   use_intersection_denominator = FALSE
+# ) {
+#   if (missing(x) || missing(knn) || missing(k_expand)) {
+#     stop("Usage: bicor_graph(x, knn, k_expand, k_beta = 3)", call. = FALSE)
+#   }
+#   x <- .coerce_dense(x)
+#   S <- bicor(
+#     x,
+#     pairwise.complete.obs = TRUE,
+#     use_intersection_denominator = use_intersection_denominator
+#   )
+#   .Call(
+#     "tgs_cor_graph",
+#     S,
+#     as.integer(knn),
+#     as.integer(k_expand),
+#     as.numeric(k_beta),
+#     new.env(parent = parent.frame()),
+#     PACKAGE = "tgstat"
+#   )
+# }
 
-#' Bicor-based graph clustering
-#' @param graph graph returned by bicor_graph()/tgs_graph()
-#' @param min_cluster_size integer
-#' @param cooling numeric; default 1.05
-#' @param burn_in integer; default 10
-#' @return clustering object returned by tgstat
-#' @export
-bicor_graph_cover <- function(
-  graph,
-  min_cluster_size,
-  cooling = 1.05,
-  burn_in = 10
-) {
-  if (missing(graph) || missing(min_cluster_size)) {
-    stop(
-      "Usage: bicor_graph_cover(graph, min_cluster_size, cooling = 1.05, burn_in = 10)",
-      call. = FALSE
-    )
-  }
-  .Call(
-    "tgs_graph2cluster",
-    graph,
-    as.integer(min_cluster_size),
-    as.numeric(cooling),
-    as.integer(burn_in),
-    new.env(parent = parent.frame()),
-    PACKAGE = "tgstat"
-  )
-}
+# # #' Bicor-based graph clustering
+# #' @param graph graph returned by bicor_graph()/tgs_graph()
+# #' @param min_cluster_size integer
+# #' @param cooling numeric; default 1.05
+# #' @param burn_in integer; default 10
+# #' @return clustering object returned by tgstat
+# #' @export
+# bicor_graph_cover <- function(
+#   graph,
+#   min_cluster_size,
+#   cooling = 1.05,
+#   burn_in = 10
+# ) {
+#   if (missing(graph) || missing(min_cluster_size)) {
+#     stop(
+#       "Usage: bicor_graph_cover(graph, min_cluster_size, cooling = 1.05, burn_in = 10)",
+#       call. = FALSE
+#     )
+#   }
+#   .Call(
+#     "tgs_graph2cluster",
+#     graph,
+#     as.integer(min_cluster_size),
+#     as.numeric(cooling),
+#     as.integer(burn_in),
+#     new.env(parent = parent.frame()),
+#     PACKAGE = "tgstat"
+#   )
+# }
 
-#' Bicor-based graph clustering with resampling (ensemble)
-#' @param graph graph returned by bicor_graph()/tgs_graph()
-#' @param knn K used in the graph
-#' @param min_cluster_size integer
-#' @param cooling numeric; default 1.05
-#' @param burn_in integer; default 10
-#' @param p_resamp resampling proportion (0,1]
-#' @param n_resamp number of resamples
-#' @param method one of "hash","full","edges"
-#' @return resampled clustering object returned by tgstat
-#' @export
-bicor_graph_cover_resample <- function(
-  graph,
-  knn,
-  min_cluster_size,
-  cooling = 1.05,
-  burn_in = 10,
-  p_resamp = 0.75,
-  n_resamp = 500,
-  method = c("hash", "full", "edges")
-) {
-  if (missing(graph) || missing(knn) || missing(min_cluster_size)) {
-    stop(
-      "Usage: bicor_graph_cover_resample(graph, knn, min_cluster_size, cooling = 1.05, burn_in = 10, p_resamp = 0.75, n_resamp = 500)",
-      call. = FALSE
-    )
-  }
-  method <- match.arg(method)
+# #' Bicor-based graph clustering with resampling (ensemble)
+# #' @param graph graph returned by bicor_graph()/tgs_graph()
+# #' @param knn K used in the graph
+# #' @param min_cluster_size integer
+# #' @param cooling numeric; default 1.05
+# #' @param burn_in integer; default 10
+# #' @param p_resamp resampling proportion (0,1]
+# #' @param n_resamp number of resamples
+# #' @param method one of "hash","full","edges"
+# #' @return resampled clustering object returned by tgstat
+# #' @export
+# bicor_graph_cover_resample <- function(
+#   graph,
+#   knn,
+#   min_cluster_size,
+#   cooling = 1.05,
+#   burn_in = 10,
+#   p_resamp = 0.75,
+#   n_resamp = 500,
+#   method = c("hash", "full", "edges")
+# ) {
+#   if (missing(graph) || missing(knn) || missing(min_cluster_size)) {
+#     stop(
+#       "Usage: bicor_graph_cover_resample(graph, knn, min_cluster_size, cooling = 1.05, burn_in = 10, p_resamp = 0.75, n_resamp = 500)",
+#       call. = FALSE
+#     )
+#   }
+#   method <- match.arg(method)
 
-  if (method == "hash") {
-    .Call(
-      "tgs_graph2cluster_multi_hash",
-      graph,
-      as.integer(knn),
-      as.integer(min_cluster_size),
-      as.numeric(cooling),
-      as.integer(burn_in),
-      as.numeric(p_resamp),
-      as.integer(n_resamp),
-      new.env(parent = parent.frame()),
-      PACKAGE = "tgstat"
-    )
-  } else if (method == "full") {
-    .Call(
-      "tgs_graph2cluster_multi_full",
-      graph,
-      as.integer(knn),
-      as.integer(min_cluster_size),
-      as.numeric(cooling),
-      as.integer(burn_in),
-      as.numeric(p_resamp),
-      as.integer(n_resamp),
-      new.env(parent = parent.frame()),
-      PACKAGE = "tgstat"
-    )
-  } else {
-    # "edges"
-    .Call(
-      "tgs_graph2cluster_multi_edges",
-      graph,
-      as.integer(knn),
-      as.integer(min_cluster_size),
-      as.numeric(cooling),
-      as.integer(burn_in),
-      as.numeric(p_resamp),
-      as.integer(n_resamp),
-      new.env(parent = parent.frame()),
-      PACKAGE = "tgstat"
-    )
-  }
-}
+#   if (method == "hash") {
+#     .Call(
+#       "tgs_graph2cluster_multi_hash",
+#       graph,
+#       as.integer(knn),
+#       as.integer(min_cluster_size),
+#       as.numeric(cooling),
+#       as.integer(burn_in),
+#       as.numeric(p_resamp),
+#       as.integer(n_resamp),
+#       new.env(parent = parent.frame()),
+#       PACKAGE = "tgstat"
+#     )
+#   } else if (method == "full") {
+#     .Call(
+#       "tgs_graph2cluster_multi_full",
+#       graph,
+#       as.integer(knn),
+#       as.integer(min_cluster_size),
+#       as.numeric(cooling),
+#       as.integer(burn_in),
+#       as.numeric(p_resamp),
+#       as.integer(n_resamp),
+#       new.env(parent = parent.frame()),
+#       PACKAGE = "tgstat"
+#     )
+#   } else {
+#     # "edges"
+#     .Call(
+#       "tgs_graph2cluster_multi_edges",
+#       graph,
+#       as.integer(knn),
+#       as.integer(min_cluster_size),
+#       as.numeric(cooling),
+#       as.integer(burn_in),
+#       as.numeric(p_resamp),
+#       as.integer(n_resamp),
+#       new.env(parent = parent.frame()),
+#       PACKAGE = "tgstat"
+#     )
+#   }
+# }
