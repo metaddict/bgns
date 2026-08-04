@@ -51,16 +51,14 @@ jobs:
       - name: Reconstruct and verify the uploaded archive
         shell: python {0}
         run: |
-          import base64
           import hashlib
           import tarfile
           from pathlib import Path
 
-          parts = sorted(Path("ci").glob("bgns_0.4.2.tar.gz.b64.part*"))
-          if len(parts) != 4:
-              raise SystemExit(f"expected four archive parts, found {len(parts)}")
-          encoded = "".join(path.read_text(encoding="ascii") for path in parts)
-          payload = base64.b64decode(encoded, validate=True)
+          parts = sorted(Path("ci").glob("bgns_0.4.2.tar.gz.part*"))
+          if len(parts) != 8:
+              raise SystemExit(f"expected eight archive parts, found {len(parts)}")
+          payload = b"".join(path.read_bytes() for path in parts)
           actual = hashlib.sha256(payload).hexdigest()
           expected = "f49bdd49be8fb5bf6d2cd49bc44db7bfcbf94e5aabce74c79de931caa04dc070"
           if actual != expected:
@@ -179,16 +177,14 @@ jobs:
       - name: Reconstruct and extract uploaded archive
         shell: python {0}
         run: |
-          import base64
           import hashlib
           import tarfile
           from pathlib import Path
 
-          parts = sorted(Path("ci").glob("bgns_0.4.2.tar.gz.b64.part*"))
-          if len(parts) != 4:
-              raise SystemExit(f"expected four archive parts, found {len(parts)}")
-          encoded = "".join(path.read_text(encoding="ascii") for path in parts)
-          payload = base64.b64decode(encoded, validate=True)
+          parts = sorted(Path("ci").glob("bgns_0.4.2.tar.gz.part*"))
+          if len(parts) != 8:
+              raise SystemExit(f"expected eight archive parts, found {len(parts)}")
+          payload = b"".join(path.read_bytes() for path in parts)
           actual = hashlib.sha256(payload).hexdigest()
           expected = "f49bdd49be8fb5bf6d2cd49bc44db7bfcbf94e5aabce74c79de931caa04dc070"
           if actual != expected:
