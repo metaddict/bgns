@@ -18,10 +18,10 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     env:
-      _R_CHECK_FORCE_SUGGESTS_: false
-      _R_CHECK_CRAN_INCOMING_REMOTE_: false
-      _R_CHECK_LIMIT_CORES_: true
-      BGNS_NUM_THREADS: 2
+      _R_CHECK_FORCE_SUGGESTS_: 'false'
+      _R_CHECK_CRAN_INCOMING_REMOTE_: 'false'
+      _R_CHECK_LIMIT_CORES_: 'true'
+      BGNS_NUM_THREADS: '2'
 
     steps:
       - uses: actions/checkout@v4
