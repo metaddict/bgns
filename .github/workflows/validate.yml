@@ -1,0 +1,114 @@
+name: Validate bgns 0.4.2 clean
+
+on:
+  push:
+    branches:
+      - validation/bgns-0.4.2-clean
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: ${{ matrix.os }} / R release
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-14
+          - windows-latest
+    env:
+      _R_CHECK_FORCE_SUGGESTS_: "false"
+      _R_CHECK_LIMIT_CORES_: "true"
+      _R_CHECK_CRAN_INCOMING_REMOTE_: "false"
+      BGNS_NUM_THREADS: "2"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: release
+          use-public-rspm: true
+
+      - uses: r-lib/actions/setup-pandoc@v2
+
+      - name: Reconstruct and verify uploaded archive
+        shell: bash
+        run: |
+          python - <<'PY'
+          import base64
+          import hashlib
+          from pathlib import Path
+
+          expected = "f49bdd49be8fb5bf6d2cd49bc44db7bfcbf94e5aabce74c79de931caa04dc070"
+          parts = sorted(Path("ci").glob("bgns_0.4.2.tar.gz.b64.part*"))
+          if len(parts) != 4:
+              raise SystemExit(f"Expected 4 archive parts, found {len(parts)}")
+          encoded = "".join(p.read_text(encoding="ascii") for p in parts)
+          payload = base64.b64decode(encoded, validate=True)
+          actual = hashlib.sha256(payload).hexdigest()
+          if actual != expected:
+              raise SystemExit(f"SHA-256 mismatch: {actual} != {expected}")
+          Path("bgns_0.4.2.input.tar.gz").write_bytes(payload)
+          print(f"Verified {len(payload)} bytes; sha256={actual}")
+          PY
+
+      - name: Install declared dependencies
+        shell: Rscript {0}
+        run: |
+          options(repos = c(CRAN = "https://cloud.r-project.org"))
+          needed <- c("Matrix", "testthat", "knitr", "rmarkdown")
+          missing <- needed[!vapply(needed, requireNamespace, logical(1), quietly = TRUE)]
+          if (length(missing)) install.packages(missing, dependencies = TRUE)
+          stopifnot(all(vapply(needed, requireNamespace, logical(1), quietly = TRUE)))
+
+      - name: Extract and build real source package
+        shell: bash
+        run: |
+          rm -rf source bgns_0.4.2.tar.gz
+          mkdir source
+          tar -xzf bgns_0.4.2.input.tar.gz -C source
+          test -f source/bgns/DESCRIPTION
+          grep -E '^Package: bgns$' source/bgns/DESCRIPTION
+          grep -E '^Version: 0\.4\.2$' source/bgns/DESCRIPTION
+          R CMD build source/bgns
+          test -f bgns_0.4.2.tar.gz
+
+      - name: Install built package and bundled tests
+        shell: bash
+        run: R CMD INSTALL --install-tests bgns_0.4.2.tar.gz
+
+      - name: Run focused runtime validation
+        shell: bash
+        run: Rscript ci/runtime-validation.R
+
+      - name: Run installed test suite
+        shell: bash
+        run: Rscript -e 'library(testthat); library(bgns); testthat::test_package("bgns", reporter = "summary")'
+
+      - name: Run R CMD check as CRAN
+        shell: bash
+        run: |
+          rm -rf bgns.Rcheck
+          R CMD check --as-cran --no-manual bgns_0.4.2.tar.gz
+          cat bgns.Rcheck/00check.log
+
+      - name: Upload build and check output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bgns-0.4.2-${{ matrix.os }}
+          path: |
+            bgns_0.4.2.tar.gz
+            bgns.Rcheck
+          if-no-files-found: ignore
+          retention-days: 7
