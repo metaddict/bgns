@@ -1,0 +1,7 @@
+args <- commandArgs(trailingOnly = TRUE)
+if (length(args) != 2L) stop("usage: compare-modes.R <a.rds> <b.rds>")
+a <- readRDS(args[[1L]])
+b <- readRDS(args[[2L]])
+z <- all.equal(a, b, tolerance = 1e-9, check.attributes = TRUE)
+if (!isTRUE(z)) stop(sprintf("runtime modes disagree: %s", paste(z, collapse = "; ")), call. = FALSE)
+cat("single-thread scalar and two-thread SIMD-enabled results agree\n")
