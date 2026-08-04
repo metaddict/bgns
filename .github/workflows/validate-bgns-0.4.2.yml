@@ -49,19 +49,24 @@ jobs:
         uses: r-lib/actions/setup-pandoc@v2
 
       - name: Reconstruct and verify the uploaded archive
-        shell: python
+        shell: python {0}
         run: |
           import base64
           import hashlib
           import tarfile
           from pathlib import Path
 
-          encoded = Path("ci/bgns_0.4.2.tar.gz.b64").read_text(encoding="ascii")
+          parts = sorted(Path("ci").glob("bgns_0.4.2.tar.gz.b64.part*"))
+          if len(parts) != 4:
+              raise SystemExit(f"expected four archive parts, found {len(parts)}")
+          encoded = "".join(path.read_text(encoding="ascii") for path in parts)
           payload = base64.b64decode(encoded, validate=True)
           actual = hashlib.sha256(payload).hexdigest()
           expected = "f49bdd49be8fb5bf6d2cd49bc44db7bfcbf94e5aabce74c79de931caa04dc070"
           if actual != expected:
               raise SystemExit(f"SHA-256 mismatch: {actual} != {expected}")
+          if len(payload) != 30006:
+              raise SystemExit(f"archive size mismatch: {len(payload)} != 30006")
 
           archive = Path("validation/input/bgns_0.4.2.tar.gz")
           archive.parent.mkdir(parents=True, exist_ok=True)
@@ -92,7 +97,7 @@ jobs:
         run: |
           mkdir -p validation/build
           cd validation/build
-          R CMD build --no-manual ../source/bgns
+          R CMD build ../source/bgns
           test -f bgns_0.4.2.tar.gz
 
       - name: Install the R-built package
@@ -172,16 +177,23 @@ jobs:
           use-public-rspm: true
 
       - name: Reconstruct and extract uploaded archive
-        shell: python
+        shell: python {0}
         run: |
           import base64
+          import hashlib
           import tarfile
           from pathlib import Path
 
-          payload = base64.b64decode(
-              Path("ci/bgns_0.4.2.tar.gz.b64").read_text(encoding="ascii"),
-              validate=True,
-          )
+          parts = sorted(Path("ci").glob("bgns_0.4.2.tar.gz.b64.part*"))
+          if len(parts) != 4:
+              raise SystemExit(f"expected four archive parts, found {len(parts)}")
+          encoded = "".join(path.read_text(encoding="ascii") for path in parts)
+          payload = base64.b64decode(encoded, validate=True)
+          actual = hashlib.sha256(payload).hexdigest()
+          expected = "f49bdd49be8fb5bf6d2cd49bc44db7bfcbf94e5aabce74c79de931caa04dc070"
+          if actual != expected:
+              raise SystemExit(f"SHA-256 mismatch: {actual} != {expected}")
+
           archive = Path("validation/input/bgns_0.4.2.tar.gz")
           archive.parent.mkdir(parents=True, exist_ok=True)
           archive.write_bytes(payload)
