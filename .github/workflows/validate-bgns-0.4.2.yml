@@ -1,0 +1,79 @@
+name: Validate bgns 0.4.2
+
+on:
+  push:
+    branches:
+      - agent/runtime-validation-0.4.2
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-check-runtime:
+    name: ${{ matrix.os }} / R release
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    env:
+      _R_CHECK_FORCE_SUGGESTS_: false
+      _R_CHECK_CRAN_INCOMING_REMOTE_: false
+      _R_CHECK_LIMIT_CORES_: true
+      BGNS_NUM_THREADS: 2
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: release
+          use-public-rspm: true
+
+      - uses: r-lib/actions/setup-pandoc@v2
+
+      - name: Materialize uploaded source package
+        run: python .github/ci/materialize.py
+
+      - name: Install checking dependencies
+        shell: Rscript {0}
+        run: |
+          install.packages(
+            c("Matrix", "testthat", "knitr", "rmarkdown", "rcmdcheck"),
+            repos = "https://cloud.r-project.org"
+          )
+
+      - name: Build source tarball
+        shell: bash
+        run: |
+          set -euxo pipefail
+          R CMD build .
+          test -f bgns_0.4.2.tar.gz
+
+      - name: Install built source tarball
+        shell: bash
+        run: R CMD INSTALL bgns_0.4.2.tar.gz
+
+      - name: Runtime and numerical validation
+        shell: Rscript {0}
+        run: source(".github/ci/runtime-validation.R", echo = TRUE)
+
+      - name: R CMD check as CRAN
+        shell: Rscript {0}
+        run: |
+          rcmdcheck::rcmdcheck(
+            "bgns_0.4.2.tar.gz",
+            args = c("--as-cran", "--no-manual"),
+            error_on = "warning",
+            check_dir = "check"
+          )
+
+      - name: Upload check artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bgns-check-${{ matrix.os }}
+          path: |
+            check
+            bgns_0.4.2.tar.gz
