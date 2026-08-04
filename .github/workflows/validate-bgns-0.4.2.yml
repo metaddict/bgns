@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - agent/validate-bgns-0.4.2
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
