@@ -1,0 +1,110 @@
+name: Validate bgns 0.4.2
+
+on:
+  push:
+    branches:
+      - validation/bgns-0.4.2-runtime
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-check-runtime:
+    name: ${{ matrix.os }} / R release
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    env:
+      _R_CHECK_FORCE_SUGGESTS_: "false"
+      _R_CHECK_LIMIT_CORES_: "true"
+      R_REMOTES_NO_ERRORS_FROM_WARNINGS: "true"
+      BGNS_NUM_THREADS: "2"
+
+    steps:
+      - name: Checkout validation branch
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Set up R
+        uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: release
+          use-public-rspm: true
+
+      - name: Set up Pandoc
+        uses: r-lib/actions/setup-pandoc@v2
+
+      - name: Reconstruct uploaded source archive
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import base64
+          encoded = Path("ci/bgns_0.4.2.tar.gz.b64").read_text(encoding="utf-8")
+          Path("ci/bgns_0.4.2.tar.gz").write_bytes(base64.b64decode(encoded))
+          PY
+          python - <<'PY'
+          from pathlib import Path
+          import hashlib
+          p = Path("ci/bgns_0.4.2.tar.gz")
+          print("archive bytes:", p.stat().st_size)
+          print("sha256:", hashlib.sha256(p.read_bytes()).hexdigest())
+          PY
+
+      - name: Install R dependencies
+        shell: Rscript {0}
+        run: |
+          options(repos = c(CRAN = "https://cloud.r-project.org"))
+          install.packages(c("Matrix", "testthat", "knitr", "rmarkdown"))
+
+      - name: Extract and build source package
+        shell: bash
+        run: |
+          rm -rf work
+          mkdir -p work/src work/build
+          tar -xzf ci/bgns_0.4.2.tar.gz -C work/src
+          test -f work/src/bgns/DESCRIPTION
+          grep -E '^Version: 0\.4\.2$' work/src/bgns/DESCRIPTION
+          cd work/build
+          R CMD build ../src/bgns
+          test -f bgns_0.4.2.tar.gz
+
+      - name: R CMD check as CRAN
+        shell: bash
+        run: |
+          cd work/build
+          R CMD check --as-cran --no-manual bgns_0.4.2.tar.gz
+          cat bgns.Rcheck/00check.log
+          if grep -Eq '^Status:.*(ERROR|WARNING)' bgns.Rcheck/00check.log; then
+            echo "R CMD check reported an ERROR or WARNING"
+            exit 1
+          fi
+
+      - name: Install built package
+        shell: bash
+        run: |
+          R CMD INSTALL --preclean work/build/bgns_0.4.2.tar.gz
+
+      - name: Run focused runtime validation
+        shell: bash
+        run: |
+          Rscript ci/runtime-validation.R
+
+      - name: Upload check logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bgns-0.4.2-${{ runner.os }}-check
+          path: |
+            work/build/bgns.Rcheck/00check.log
+            work/build/bgns.Rcheck/tests
+          if-no-files-found: ignore
