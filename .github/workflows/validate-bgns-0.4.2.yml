@@ -40,7 +40,7 @@ jobs:
         uses: r-lib/actions/setup-pandoc@v2
 
       - name: Reconstruct uploaded source archive
-        shell: python
+        shell: python {0}
         run: |
           from pathlib import Path
           import base64
