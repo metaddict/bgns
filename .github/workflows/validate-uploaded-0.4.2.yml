@@ -1,0 +1,105 @@
+name: Validate uploaded bgns 0.4.2
+
+on:
+  push:
+    branches:
+      - agent/runtime-validate-0.4.2
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-check-runtime:
+    name: ${{ matrix.os }} / R release
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+
+    env:
+      _R_CHECK_LIMIT_CORES_: "true"
+      BGNS_NUM_THREADS: "2"
+      R_KEEP_PKG_SOURCE: "yes"
+
+    steps:
+      - name: Checkout validation branch
+        uses: actions/checkout@v4
+
+      - name: Set up R
+        uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: release
+          use-public-rspm: true
+
+      - name: Set up Pandoc
+        uses: r-lib/actions/setup-pandoc@v2
+
+      - name: Reconstruct and verify uploaded source archive
+        shell: bash
+        run: |
+          python - <<'PY'
+          import base64
+          import hashlib
+          from pathlib import Path
+
+          encoded = Path("ci/bgns_0.4.2.tar.gz.b64").read_text(encoding="utf-8")
+          payload = base64.b64decode(encoded)
+          digest = hashlib.sha256(payload).hexdigest()
+          expected = "f49bdd49be8fb5bf6d2cd49bc44db7bfcbf94e5aabce74c79de931caa04dc070"
+          if digest != expected:
+              raise SystemExit(f"archive SHA-256 mismatch: {digest} != {expected}")
+          Path("bgns_0.4.2.input.tar.gz").write_bytes(payload)
+          print(f"validated archive SHA-256: {digest}")
+          PY
+          tar -xzf bgns_0.4.2.input.tar.gz
+          test "$(awk -F': ' '$1 == "Version" {print $2}' bgns/DESCRIPTION)" = "0.4.2"
+
+      - name: Install R package dependencies
+        uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          working-directory: bgns
+          extra-packages: |
+            any::rcmdcheck
+          needs: check
+
+      - name: Build source package with R CMD build
+        shell: bash
+        run: |
+          R CMD build bgns
+          test -f bgns_0.4.2.tar.gz
+
+      - name: Check built source package
+        shell: bash
+        run: |
+          R CMD check --as-cran --no-manual bgns_0.4.2.tar.gz
+
+      - name: Install built source package
+        shell: bash
+        run: |
+          R CMD INSTALL --install-tests bgns_0.4.2.tar.gz
+
+      - name: Runtime validation with scalar path and one thread
+        shell: bash
+        run: |
+          BGNS_SIMD=0 BGNS_NUM_THREADS=1 Rscript ci/runtime-validation.R scalar
+
+      - name: Runtime validation with runtime SIMD and two threads
+        shell: bash
+        run: |
+          BGNS_SIMD=1 BGNS_NUM_THREADS=2 Rscript ci/runtime-validation.R simd
+
+      - name: Upload check directory
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: check-${{ runner.os }}
+          path: |
+            bgns.Rcheck
+            bgns_0.4.2.tar.gz
+          if-no-files-found: warn
