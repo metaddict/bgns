@@ -1,5 +1,7 @@
 # bgns 0.4.3
 
+* Restore Windows builds by removing an unnecessary platform-specific R header.
+
 * Emit each tidy self-correlation edge once across processing panels.
 * Bound neighbor counts by available candidates and prevent integer overflow in top-k buffers.
 * Preserve independent dimension names for rectangular correlation matrices.

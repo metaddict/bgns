@@ -21,7 +21,6 @@
 #include <R_ext/BLAS.h>
 #include <R_ext/Utils.h>
 #include <R_ext/Callbacks.h>
-#include <Rinterface.h>
 
 #ifdef _OPENMP
 #include <omp.h>
