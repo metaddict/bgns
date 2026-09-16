@@ -1,9 +1,5 @@
 useDynLib(bgns, .registration = TRUE, .fixes = "C_")
-import(tgstat)
-importFrom(Matrix, t, drop0)
-
-export(bicor)
-export(bicor_knn)
-export(bicor_graph)
-export(bicor_graph_cover)
-export(bicor_graph_cover_resample)
+export(bicor, bicor_knn)
+import(Matrix)
+import(methods)
+importFrom(stats,setNames)

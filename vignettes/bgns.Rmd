@@ -1,0 +1,148 @@
+---
+title: "bgns: Biweight Graph and Network Statistics"
+author: "Aditya Kshirsagar"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{bgns: Biweight Graph and Network Statistics}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  fig.width = 6,
+  fig.height = 4
+)
+```
+
+## Introduction
+
+`bgns` provides biweight midcorrelation and exact bicor-based k-nearest-neighbor
+KNN graph construction for dense and sparse numeric matrices. bgns builds graphs
+from robust correlation structure, supporting workflows where similarity is
+better represented by coordinated variation. The package supports dense matrices
+and sparse `Matrix::dgCMatrix` inputs, and the tidy and KNN paths are panelized
+so that a full dense similarity matrix does not need to be stored.
+
+The package expects rows to be observations and columns to be the items being
+compared, such as genes, cells, metacells, samples, or features.
+
+## Installation
+
+```{r installation, eval=FALSE}
+install.packages("bgns")
+```
+
+## Dense bicor
+
+```{r dense-bicor}
+library(bgns)
+set.seed(1)
+x <- matrix(rnorm(240), nrow = 40, ncol = 6)
+x[sample(length(x), 8)] <- NA_real_
+colnames(x) <- paste0("item", seq_len(ncol(x)))
+
+cmat <- bicor(x)
+round(cmat[1:4, 1:4], 3)
+```
+
+For graph workflows, tidy output is often more useful than a dense matrix.
+
+```{r tidy-bicor}
+td <- bicor(x, tidy = TRUE, threshold = 0.1)
+head(td)
+```
+
+## Exact bicor KNN graphs
+
+`bicor_knn()` returns a directed edge table. `col1` is the target column, `col2`
+is the selected neighbor, `val` is the bicor value, and `rank` is the within-target
+rank.
+
+```{r knn-bicor}
+kn <- bicor_knn(x, knn = 2, threshold = -Inf)
+kn
+```
+
+When `y` is supplied, neighbors are selected from columns of `x` for each target
+column in `y`.
+
+```{r bipartite-knn}
+y <- matrix(rnorm(160), nrow = 40, ncol = 4)
+colnames(y) <- paste0("target", seq_len(ncol(y)))
+head(bicor_knn(x, y, knn = 2, bipartite_levels = "separate"))
+```
+
+Dense and sparse inputs can also be mixed in bipartite KNN calls.
+
+```{r mixed-knn}
+xs <- Matrix::rsparsematrix(40, 6, density = 0.3)
+head(bicor_knn(xs, y, knn = 2, threshold = -Inf, bipartite_levels = "separate"))
+```
+
+## Missing values and thresholds
+
+With `pairwise.complete.obs = TRUE`, each edge is computed on its finite overlap.
+With `pairwise.complete.obs = FALSE`, KNN edges involving incomplete columns are
+not eligible.
+
+```{r pairwise-complete}
+kn_pairwise <- bicor_knn(x, knn = 2, pairwise.complete.obs = TRUE)
+kn_complete <- bicor_knn(x, knn = 2, pairwise.complete.obs = FALSE)
+
+nrow(kn_pairwise)
+nrow(kn_complete)
+```
+
+The `threshold` argument in `bicor_knn()` is a signed cutoff applied before
+top-k selection; candidate bicor values must be strictly greater than the cutoff.
+For example, `threshold = 0` keeps only positive bicor edges.
+
+```{r threshold}
+positive_edges <- bicor_knn(x, knn = 2, threshold = 0)
+positive_edges
+```
+
+## Sparse matrices
+
+Sparse inputs are accepted through `Matrix::dgCMatrix`; other sparse `Matrix` classes are coerced to `dgCMatrix` when possible.
+
+```{r sparse}
+xs <- Matrix::rsparsematrix(40, 6, density = 0.3)
+colnames(xs) <- paste0("s", seq_len(ncol(xs)))
+
+head(bicor(xs, tidy = TRUE, threshold = 0))
+bicor_knn(xs, knn = 2, threshold = 0)
+```
+
+## Relationship to related packages
+
+`WGCNA` provides a mature ecosystem for weighted correlation network analysis,
+including module detection and network summaries. `bgns` is narrower: it focuses
+on memory-efficient bicor kernels and exact bicor KNN graph construction.
+
+`BiocNeighbors` provides nearest-neighbor search infrastructure for standard
+geometric distances. `bgns` targets robust correlation-native KNN graphs where
+coordinated variation is the similarity signal of interest.
+
+## Runtime tuning
+
+`BGNS_MEM_MB` controls the scratch-memory budget used for panelized computation.
+When OpenMP is available, `BGNS_NUM_THREADS` controls the maximum number of
+threads used by `bgns`; the default is at most two threads.
+
+```{r runtime-tuning, eval=FALSE}
+Sys.setenv(BGNS_MEM_MB = 512, BGNS_NUM_THREADS = 2)
+```
+
+## Internal execution engine
+
+Version 0.4.2 keeps the public API focused on `bicor()` and `bicor_knn()` but uses a stronger internal execution layer. Long-running panel loops use conservative thread control through `BGNS_NUM_THREADS`, bounded panel sizes through `BGNS_MEM_MB`, deterministic top-k buffers, sparse `dgCMatrix` summaries, optional runtime-gated SIMD kernels where available, and interrupt checks at panel boundaries. These pieces are internal and do not change the mathematical definition of the bicor score.
+
+## Session information
+
+```{r session-info}
+sessionInfo()
+```

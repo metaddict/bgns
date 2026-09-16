@@ -1,0 +1,18 @@
+citHeader("To cite bgns in publications use:")
+
+year <- "2026"
+version <- meta$Version
+
+bibentry(
+  bibtype = "Manual",
+  title = "Biweight Graph and Network Statistics",
+  author = person("Aditya", "Kshirsagar"),
+  year = year,
+  note = paste("R package version", version),
+  url = "https://github.com/metaddict/bgns",
+  textVersion = paste(
+    "Kshirsagar A.", paste0("(", year, ")."),
+    "Biweight Graph and Network Statistics.",
+    "R package version", version
+  )
+)
