@@ -28,6 +28,15 @@
   x
 }
 
+.bgns_edge_names <- function(x, name) {
+  nm <- colnames(x)
+  if (!is.null(nm) && (anyNA(nm) || anyDuplicated(nm))) {
+    stop(sprintf("%s column names must be unique and non-missing for edge output", name),
+         call. = FALSE)
+  }
+  invisible(NULL)
+}
+
 .bgns_scalar_number <- function(x, name, allow_infinite = FALSE) {
   if (!is.numeric(x) || length(x) != 1L || is.na(x) ||
       (!allow_infinite && !is.finite(x))) {
@@ -75,6 +84,14 @@
 #'   required between two columns, including fully finite paths.
 #' @return A dense correlation matrix for dense inputs when `tidy = FALSE`, or a
 #'   data frame with columns `col1`, `col2`, and `cor` when `tidy = TRUE`.
+#' @details Column medians and scaled MADs (constant 1.4826) are estimated from
+#'   finite observations, with a biweight tuning multiplier of 9. These estimates
+#'   and weights stay fixed across pairs. Numerators use shared finite rows;
+#'   denominators use full-column sums of squared weighted deviations unless
+#'   `use_intersection_denominator = TRUE` restricts them to the overlap.
+#'   Implicit sparse entries are observed zeros. Row matching is positional.
+#'   Named edge outputs require unique, non-missing column names within each
+#'   input. Unnamed inputs use column indices.
 #' @export
 bicor <- function(
   x,
@@ -104,6 +121,8 @@ bicor <- function(
   }
 
   if (isTRUE(tidy)) {
+    .bgns_edge_names(x, "x")
+    if (!is.null(y)) .bgns_edge_names(y, "y")
     return(.bgns_with_envvar("BGNS_MIN_OVERLAP", min_overlap, function() .Call(
       C_C_bicor_tidy,
       x,
@@ -136,7 +155,8 @@ bicor <- function(
 #' @param y optional numeric matrix or `dgCMatrix` with the same number of rows
 #'   as `x`. When supplied, neighbors are selected from columns of `x` for each
 #'   target column of `y`.
-#' @param knn integer. Number of neighbors per target column.
+#' @param knn integer. Maximum number of neighbors per target column. Requests
+#'   exceeding the available candidates return all eligible neighbors.
 #' @param pairwise.complete.obs logical. If `TRUE`, compute each candidate edge on
 #'   the finite overlap for that column pair. If `FALSE`, only pairs where both
 #'   preprocessed columns are complete are eligible.
@@ -144,13 +164,24 @@ bicor <- function(
 #'   candidate bicor values must be strictly greater than `threshold`.
 #' @param use_intersection_denominator logical. Use overlap-specific denominators
 #'   for incomplete or sparse paths.
-#' @param direct_sparse logical. If `TRUE`, stream top-k edges without dense
-#'   similarity intermediates.
+#' @param direct_sparse logical. If `TRUE`, retain top-k candidates while
+#'   evaluating similarities in panels, which may be dense. If `FALSE`, a full
+#'   similarity matrix may be used when inputs are fully finite, both use the
+#'   same storage type, `use_intersection_denominator = FALSE`, and the estimated
+#'   working allocation fits the scratch-memory budget. Otherwise use panels.
 #' @param bipartite_levels one of `"strict"` or `"separate"`. Use `"separate"`
 #'   when `x` and `y` have distinct column-name levels.
 #' @param min_overlap integer. Minimum number of shared finite observations
 #'   required between two columns, including fully finite paths.
 #' @return A data frame with columns `col1`, `col2`, `val`, and `rank`.
+#' @details Column medians and scaled MADs (constant 1.4826) are estimated from
+#'   finite observations, with a biweight tuning multiplier of 9. These estimates
+#'   and weights stay fixed across pairs. Numerators use shared finite rows;
+#'   denominators use full-column sums of squared weighted deviations unless
+#'   `use_intersection_denominator = TRUE` restricts them to the overlap.
+#'   Implicit sparse entries are observed zeros. Row matching is positional.
+#'   Named edge outputs require unique, non-missing column names within each
+#'   input. Unnamed inputs use column indices.
 #' @export
 bicor_knn <- function(
   x,
@@ -177,6 +208,8 @@ bicor_knn <- function(
   direct_sparse <- .bgns_scalar_logical(direct_sparse, "direct_sparse")
   min_overlap <- .bgns_positive_integer(min_overlap, "min_overlap")
   bipartite_levels <- match.arg(bipartite_levels)
+  .bgns_edge_names(x, "x")
+  if (!is.null(y)) .bgns_edge_names(y, "y")
 
   thunk_dense <- function() {
     .Call(

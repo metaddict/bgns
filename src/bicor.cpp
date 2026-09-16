@@ -114,7 +114,7 @@ static inline bool bgns_env_is_true(const char *name) {
            std::strcmp(buf, "yes") == 0;
 }
 
-static inline int bgns_num_threads() {
+[[maybe_unused]] static inline int bgns_num_threads() {
     int threads = getenv_int("BGNS_NUM_THREADS", 2);
     if (bgns_env_is_true("_R_CHECK_LIMIT_CORES_") && threads > 2) threads = 2;
     if (threads < 1) threads = 1;
@@ -128,7 +128,7 @@ static inline int bgns_num_threads() {
 }
 
 #ifdef _OPENMP
-static inline int bgns_omp_threads() { return bgns_num_threads(); }
+[[maybe_unused]] static inline int bgns_omp_threads() { return bgns_num_threads(); }
 #endif
 
 static void bgns_interrupt_thunk(void *) {
@@ -152,27 +152,27 @@ static inline void bgns_parallel_for(int n, Fn&& body, int min_parallel = -1) {
 
 enum class BgnsRuntimeIsa : int { scalar = 0, avx2 = 1, neon = 2 };
 
-static inline BgnsRuntimeIsa bgns_detect_runtime_isa() {
-    static int cached = -1;
-    if (cached >= 0) return static_cast<BgnsRuntimeIsa>(cached);
-    if (bgns_env_is_false("BGNS_SIMD")) { cached = 0; return BgnsRuntimeIsa::scalar; }
+[[maybe_unused]] static inline BgnsRuntimeIsa bgns_detect_runtime_isa() {
+    // C++ static initialization is synchronized when panel workers first
+    // reach the optional SIMD kernel concurrently.
+    static const BgnsRuntimeIsa cached = [] {
+        if (bgns_env_is_false("BGNS_SIMD")) return BgnsRuntimeIsa::scalar;
 #if defined(__aarch64__) || defined(_M_ARM64)
-    cached = 2;
-    return BgnsRuntimeIsa::neon;
+        return BgnsRuntimeIsa::neon;
 #elif defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
 # if defined(__GNUC__) && !defined(__clang__)
-    __builtin_cpu_init();
-    if (__builtin_cpu_supports("avx2")) { cached = 1; return BgnsRuntimeIsa::avx2; }
+        __builtin_cpu_init();
+        if (__builtin_cpu_supports("avx2")) return BgnsRuntimeIsa::avx2;
 # elif defined(__AVX2__)
-    cached = 1;
-    return BgnsRuntimeIsa::avx2;
+        return BgnsRuntimeIsa::avx2;
 # endif
 #endif
-    cached = 0;
-    return BgnsRuntimeIsa::scalar;
+        return BgnsRuntimeIsa::scalar;
+    }();
+    return cached;
 }
 
-static inline bool bgns_runtime_allows_avx2() {
+[[maybe_unused]] static inline bool bgns_runtime_allows_avx2() {
 #if BGNS_ENABLE_SIMD && defined(__AVX2__)
     return bgns_detect_runtime_isa() == BgnsRuntimeIsa::avx2;
 #else
@@ -181,8 +181,8 @@ static inline bool bgns_runtime_allows_avx2() {
 }
 
 struct BgnsBlock { int begin; int end; };
-static inline int bgns_block_count(int n, int block) { return (n <= 0 || block <= 0) ? 0 : (n + block - 1) / block; }
-static inline BgnsBlock bgns_block_at(int n, int block, int b) {
+[[maybe_unused]] static inline int bgns_block_count(int n, int block) { return (n <= 0 || block <= 0) ? 0 : (n + block - 1) / block; }
+[[maybe_unused]] static inline BgnsBlock bgns_block_at(int n, int block, int b) {
     const int begin = b * block;
     const int end = begin + block < n ? begin + block : n;
     return {begin, end};
@@ -214,53 +214,64 @@ struct Bitset {
 inline double median_inplace(vector<double> &v) {
     const size_t n=v.size(); if(!n) return NA_REAL; const size_t mid=n/2;
     std::nth_element(v.begin(), v.begin()+mid, v.end());
-    double m=v[mid]; if((n&1U)==0U){ auto it=std::max_element(v.begin(), v.begin()+mid); m=0.5*(m+*it); }
+    double m=v[mid]; if((n&1U)==0U){ auto it=std::max_element(v.begin(), v.begin()+mid); m = (std::fabs(m) > std::numeric_limits<double>::max()/2 || std::fabs(*it) > std::numeric_limits<double>::max()/2) ? 0.5*m + 0.5*(*it) : 0.5*(m+*it); }
     return m;
 }
-inline double mad_scaled_tls_from_vec(const vector<double> &vals, double med){
+inline double mad_raw_tls_from_vec(const vector<double> &vals, double med){
     if(vals.empty()) return NA_REAL; TLS &t=tls(); t.absbuf.resize(vals.size());
     for(size_t i=0;i<vals.size();++i) t.absbuf[i]=std::fabs(vals[i]-med);
-    double u = median_inplace(t.absbuf); if(!R_FINITE(u) || u<=0.0) return NA_REAL; return 1.4826*u;
+    double u = median_inplace(t.absbuf); if(!R_FINITE(u) || u<=0.0) return NA_REAL; return u;
 }
 
 #if BGNS_ENABLE_SIMD && defined(__AVX2__)
 static inline __m256d mm256_abs_pd(__m256d x){ const __m256i mask=_mm256_set1_epi64x(0x7fffffffffffffffLL); return _mm256_and_pd(x, _mm256_castsi256_pd(mask)); }
 #endif
 
-inline void midvariates_dense_compute(const double *vals, int n, double med, double inv_k,
+// Store weighted standardized deviations. Each column differs from the
+// unscaled midvariate by one positive constant, which cancels in both
+// full-column and overlap-specific correlation denominators.
+inline double bounded_midvariate(double x, double med, double mad, double inv_k) {
+    const double diff = x - med;
+    const double tuning = 9.0 * 1.4826;
+    const double u = !R_FINITE(diff) ? (x/mad - med/mad)/tuning :
+        ((R_FINITE(inv_k) && inv_k > 0.0) ? diff*inv_k : (diff/mad)/tuning);
+    if (!(std::fabs(u) < 1.0)) return 0.0;
+    const double w = 1.0 - u*u;
+    return u*w*w;
+}
+
+inline void midvariates_dense_compute(const double *vals, int n, double med, double mad,
                                       double *out_mv, double &out_ss){
+    const double inv_k = (1.0 / (9.0 * 1.4826)) / mad;
     out_ss=0.0;
+    int i=0;
 #if BGNS_ENABLE_SIMD && defined(__AVX2__)
-    if (bgns_runtime_allows_avx2()) {
-        const int V=4, n4 = n & ~(V-1);
-        __m256d v_med=_mm256_set1_pd(med), v_invk=_mm256_set1_pd(inv_k), vone=_mm256_set1_pd(1.0);
-        for(int i=0;i<n4;i+=V){
-            __m256d vx=_mm256_loadu_pd(vals+i);
-            __m256d diff=_mm256_sub_pd(vx, v_med);
-            __m256d u=_mm256_mul_pd(diff, v_invk);
-            __m256d au=mm256_abs_pd(u);
-            __m256d uu=_mm256_mul_pd(u,u);
-            __m256d t=_mm256_sub_pd(vone, uu);
-            __m256d w=_mm256_mul_pd(t,t);
-            __m256d mask=_mm256_cmp_pd(au, vone, _CMP_GE_OQ);
-            w=_mm256_blendv_pd(w, _mm256_setzero_pd(), mask);
-            __m256d mv=_mm256_mul_pd(diff, w);
-            _mm256_storeu_pd(out_mv+i, mv);
-            alignas(32) double tmp[4]; _mm256_store_pd(tmp, mv);
-            out_ss += tmp[0]*tmp[0]+tmp[1]*tmp[1]+tmp[2]*tmp[2]+tmp[3]*tmp[3];
+    if (bgns_runtime_allows_avx2() && R_FINITE(inv_k) && inv_k > 0.0) {
+        const int n4 = n & ~3;
+        const __m256d v_med=_mm256_set1_pd(med), v_invk=_mm256_set1_pd(inv_k);
+        const __m256d vone=_mm256_set1_pd(1.0), vmax=_mm256_set1_pd(std::numeric_limits<double>::max());
+        for(;i<n4;i+=4){
+            const __m256d diff=_mm256_sub_pd(_mm256_loadu_pd(vals+i), v_med);
+            if (_mm256_movemask_pd(_mm256_cmp_pd(mm256_abs_pd(diff), vmax, _CMP_GT_OQ))) {
+                for (int q=0;q<4;++q) {
+                    const double mv=bounded_midvariate(vals[i+q],med,mad,inv_k);
+                    out_mv[i+q]=mv; out_ss+=mv*mv;
+                }
+                continue;
+            }
+            const __m256d u=_mm256_mul_pd(diff,v_invk);
+            const __m256d inside=_mm256_cmp_pd(mm256_abs_pd(u),vone,_CMP_LT_OQ);
+            const __m256d t=_mm256_sub_pd(vone,_mm256_mul_pd(u,u));
+            const __m256d mv=_mm256_and_pd(inside,_mm256_mul_pd(u,_mm256_mul_pd(t,t)));
+            _mm256_storeu_pd(out_mv+i,mv);
+            alignas(32) double tmp[4]; _mm256_store_pd(tmp,mv);
+            out_ss+=tmp[0]*tmp[0]+tmp[1]*tmp[1]+tmp[2]*tmp[2]+tmp[3]*tmp[3];
         }
-        for(int i=n4;i<n;++i){
-            const double x=vals[i]; const double u=(x-med)*inv_k; const double a=std::fabs(u);
-            const double t=(a>=1.0)?0.0:(1.0-u*u); const double w=t*t; const double mv=(x-med)*w;
-            out_mv[i]=mv; out_ss += mv*mv;
-        }
-        return;
     }
 #endif
-    for(int i=0;i<n;++i){
-        const double x=vals[i]; const double u=(x-med)*inv_k; const double a=std::fabs(u);
-        const double t=(a>=1.0)?0.0:(1.0-u*u); const double w=t*t; const double mv=(x-med)*w;
-        out_mv[i]=mv; out_ss += mv*mv;
+    for(;i<n;++i){
+        const double mv=bounded_midvariate(vals[i],med,mad,inv_k);
+        out_mv[i]=mv; out_ss+=mv*mv;
     }
 }
 
@@ -268,10 +279,10 @@ struct DenseCol{ vector<double> mv; double sumsq=0; bool ok=false; };
 inline DenseCol build_midcol_dense(const double *col, int n){
     DenseCol out; TLS &t=tls(); t.tmp.resize(n);
     for(int i=0;i<n;++i){ double v=col[i]; if(!R_FINITE(v)){ out.ok=false; return out; } t.tmp[i]=v; }
-    t.tmp2=t.tmp; double med=median_inplace(t.tmp2); double mad=mad_scaled_tls_from_vec(t.tmp, med);
+    t.tmp2=t.tmp; double med=median_inplace(t.tmp2); double mad=mad_raw_tls_from_vec(t.tmp, med);
     if(!(mad>0.0)){ out.ok=false; return out; }
-    out.mv.resize(n); double ss=0.0; double inv_k=1.0/(9.0*mad);
-    midvariates_dense_compute(t.tmp.data(), n, med, inv_k, out.mv.data(), ss);
+    out.mv.resize(n); double ss=0.0;
+    midvariates_dense_compute(t.tmp.data(), n, med, mad, out.mv.data(), ss);
     out.sumsq=ss; out.ok=(ss>0.0); return out;
 }
 
@@ -351,7 +362,7 @@ struct PanelMixed {
     int n=0, P=0; vector<int> local_cols; vector<char> is_dense; vector<int> map_dense, map_sparse; vector<char> ok_local; PanelDense D; PanelSparse<I> S;
 };
 
-static inline bool in_upper_triangle(int gi, int gj){ return gi < gj; }
+[[maybe_unused]] static inline bool in_upper_triangle(int gi, int gj){ return gi < gj; }
 
 static inline bool chr_eq(SEXP a, SEXP b){
     if(a==b) return true; if(a==NA_STRING && b==NA_STRING) return true; if(a==NA_STRING || b==NA_STRING) return false; return std::strcmp(CHAR(a), CHAR(b))==0;
@@ -371,8 +382,8 @@ static inline void build_dense_panel_X_int(const int *x, int n, const int *cols,
     A.assign((size_t)n*(size_t)Pa, 0.0); ssX.assign(Pa, 0.0);
     bgns_parallel_for(Pa, [&](int j){ TLS &t=tls(); t.tmp.resize(n); bool ok=true;
         for(int i=0;i<n;++i){ int v = x[(size_t)cols[j]*(size_t)n + i]; if(v==NA_INTEGER){ ok=false; break; } t.tmp[i]=(double)v; }
-        if(!ok){ ssX[j]=0.0; return; } t.tmp2=t.tmp; double med=median_inplace(t.tmp2); double mad=mad_scaled_tls_from_vec(t.tmp, med); if(!(mad>0.0)){ ssX[j]=0.0; return; }
-        double *dst=A.data()+(size_t)j*(size_t)n; double ss=0.0; double inv_k=1.0/(9.0*mad); midvariates_dense_compute(t.tmp.data(), n, med, inv_k, dst, ss); ssX[j]=ss; });
+        if(!ok){ ssX[j]=0.0; return; } t.tmp2=t.tmp; double med=median_inplace(t.tmp2); double mad=mad_raw_tls_from_vec(t.tmp, med); if(!(mad>0.0)){ ssX[j]=0.0; return; }
+        double *dst=A.data()+(size_t)j*(size_t)n; double ss=0.0;  midvariates_dense_compute(t.tmp.data(), n, med, mad, dst, ss); ssX[j]=ss; });
 }
 
 // CSC helpers
@@ -420,8 +431,8 @@ static inline void build_dense_panel_X_csc(const int *Cp, const int *Ci, const d
     bgns_parallel_for(Pa, [&](int j){
         int col=cols[j]; TLS &t=tls(); t.tmp.assign(n, 0.0); bool ok=true; int st=Cp[col], ed=Cp[col+1];
         for(int k=st;k<ed;++k){ int row=Ci[k]; double v=Cx[k]; if(!R_FINITE(v)){ ok=false; break; } t.tmp[row]=v; }
-        if(!ok){ ssX[j]=0.0; return; } t.tmp2=t.tmp; double med=median_inplace(t.tmp2); double mad=mad_scaled_tls_from_vec(t.tmp, med); if(!(mad>0.0)){ ssX[j]=0.0; return; }
-        double *dst=A.data()+(size_t)j*(size_t)n; double ss=0.0; double inv_k=1.0/(9.0*mad); midvariates_dense_compute(t.tmp.data(), n, med, inv_k, dst, ss); ssX[j]=ss;
+        if(!ok){ ssX[j]=0.0; return; } t.tmp2=t.tmp; double med=median_inplace(t.tmp2); double mad=mad_raw_tls_from_vec(t.tmp, med); if(!(mad>0.0)){ ssX[j]=0.0; return; }
+        double *dst=A.data()+(size_t)j*(size_t)n; double ss=0.0;  midvariates_dense_compute(t.tmp.data(), n, med, mad, dst, ss); ssX[j]=ss;
     });
 }
 
@@ -433,14 +444,14 @@ static inline void build_panel_mixed_from_real(const double *base, int n, const 
         int gj=cols[lp]; const double *col = base + (size_t)gj*(size_t)n; TLS &t=tls(); t.tmp.clear(); t.tmp.reserve(n); t.tmpi.clear(); t.tmpi.reserve(n);
         for(int i=0;i<n;++i){ double v=col[i]; if(R_FINITE(v)){ t.tmpi.push_back(i); t.tmp.push_back(v); } }
         if(t.tmp.empty()){ pm.ok_local[lp]=0; continue; }
-        t.tmp2=t.tmp; double med=median_inplace(t.tmp2); double mad=mad_scaled_tls_from_vec(t.tmp, med); if(!(mad>0.0)){ pm.ok_local[lp]=0; continue; }
-        double inv_k=1.0/(9.0*mad); int m=(int)t.tmp.size();
+        t.tmp2=t.tmp; double med=median_inplace(t.tmp2); double mad=mad_raw_tls_from_vec(t.tmp, med); if(!(mad>0.0)){ pm.ok_local[lp]=0; continue; }
+         int m=(int)t.tmp.size();
         if(m==n){ int dpos=(int)pm.D.cols.size(); pm.is_dense[lp]=1; pm.map_dense[lp]=dpos; pm.ok_local[lp]=1; pm.D.cols.push_back(gj); pm.D.sumsq.push_back(0.0); pm.D.ok.push_back(1);
-            size_t old=pm.D.mv.size(); pm.D.mv.resize(old+(size_t)n); double *out=pm.D.mv.data()+old; double ss=0.0; midvariates_dense_compute(t.tmp.data(), n, med, inv_k, out, ss); pm.D.sumsq.back()=ss;
+            size_t old=pm.D.mv.size(); pm.D.mv.resize(old+(size_t)n); double *out=pm.D.mv.data()+old; double ss=0.0; midvariates_dense_compute(t.tmp.data(), n, med, mad, out, ss); pm.D.sumsq.back()=ss;
         } else {
             int spos=(int)pm.S.cols.size(); pm.is_dense[lp]=0; pm.map_sparse[lp]=spos; pm.ok_local[lp]=1; pm.S.cols.push_back(gj); pm.S.sumsq.push_back(0.0); pm.S.ok.push_back(1);
             size_t base_off=pm.S.idx.size(); pm.S.idx.resize(base_off+(size_t)m); pm.S.mv.resize(base_off+(size_t)m);
-            double ss=0.0; midvariates_dense_compute(t.tmp.data(), m, med, inv_k, pm.S.mv.data()+base_off, ss); pm.S.sumsq.back()=ss;
+            double ss=0.0; midvariates_dense_compute(t.tmp.data(), m, med, mad, pm.S.mv.data()+base_off, ss); pm.S.sumsq.back()=ss;
             for(int q=0;q<m;++q) pm.S.idx[base_off+q]=(I)t.tmpi[q]; pm.S.off.push_back(base_off+(size_t)m);
             if(should_build_bitset<I>(n,m)){ pm.S.has_bits.push_back(1); pm.S.bits.emplace_back(); pm.S.bits.back().init_zero(n); for(int q=0;q<m;++q) pm.S.bits.back().set(t.tmpi[q]); }
             else { pm.S.has_bits.push_back(0); pm.S.bits.emplace_back(); }
@@ -455,14 +466,14 @@ static inline void build_panel_mixed_from_int(const int *base, int n, const int 
         int gj=cols[lp]; const int *col = base + (size_t)gj*(size_t)n; TLS &t=tls(); t.tmp.clear(); t.tmpi.clear(); t.tmp.reserve(n); t.tmpi.reserve(n);
         for(int i=0;i<n;++i){ int v=col[i]; if(v!=NA_INTEGER){ t.tmpi.push_back(i); t.tmp.push_back((double)v); } }
         if(t.tmp.empty()){ pm.ok_local[lp]=0; continue; }
-        t.tmp2=t.tmp; double med=median_inplace(t.tmp2); double mad=mad_scaled_tls_from_vec(t.tmp, med); if(!(mad>0.0)){ pm.ok_local[lp]=0; continue; }
-        double inv_k=1.0/(9.0*mad); int m=(int)t.tmp.size();
+        t.tmp2=t.tmp; double med=median_inplace(t.tmp2); double mad=mad_raw_tls_from_vec(t.tmp, med); if(!(mad>0.0)){ pm.ok_local[lp]=0; continue; }
+         int m=(int)t.tmp.size();
         if(m==n){ int dpos=(int)pm.D.cols.size(); pm.is_dense[lp]=1; pm.map_dense[lp]=dpos; pm.ok_local[lp]=1; pm.D.cols.push_back(gj); pm.D.sumsq.push_back(0.0); pm.D.ok.push_back(1);
-            size_t old=pm.D.mv.size(); pm.D.mv.resize(old+(size_t)n); double *out=pm.D.mv.data()+old; double ss=0.0; midvariates_dense_compute(t.tmp.data(), n, med, inv_k, out, ss); pm.D.sumsq.back()=ss;
+            size_t old=pm.D.mv.size(); pm.D.mv.resize(old+(size_t)n); double *out=pm.D.mv.data()+old; double ss=0.0; midvariates_dense_compute(t.tmp.data(), n, med, mad, out, ss); pm.D.sumsq.back()=ss;
         } else {
             int spos=(int)pm.S.cols.size(); pm.is_dense[lp]=0; pm.map_sparse[lp]=spos; pm.ok_local[lp]=1; pm.S.cols.push_back(gj); pm.S.sumsq.push_back(0.0); pm.S.ok.push_back(1);
             size_t base_off=pm.S.idx.size(); pm.S.idx.resize(base_off+(size_t)m); pm.S.mv.resize(base_off+(size_t)m);
-            double ss=0.0; midvariates_dense_compute(t.tmp.data(), m, med, inv_k, pm.S.mv.data()+base_off, ss); pm.S.sumsq.back()=ss;
+            double ss=0.0; midvariates_dense_compute(t.tmp.data(), m, med, mad, pm.S.mv.data()+base_off, ss); pm.S.sumsq.back()=ss;
             for(int q=0;q<m;++q) pm.S.idx[base_off+q]=(I)t.tmpi[q]; pm.S.off.push_back(base_off+(size_t)m);
             if(should_build_bitset<I>(n,m)){ pm.S.has_bits.push_back(1); pm.S.bits.emplace_back(); pm.S.bits.back().init_zero(n); for(int q=0;q<m;++q) pm.S.bits.back().set(t.tmpi[q]); }
             else { pm.S.has_bits.push_back(0); pm.S.bits.emplace_back(); }
@@ -478,10 +489,10 @@ static inline void build_panel_mixed_from_csc(const int *Cp, const int *Ci, cons
         int st=Cp[gj], ed=Cp[gj+1]; for(int k=st;k<ed;++k){ int row=Ci[k]; double v=Cx[k]; if(!R_FINITE(v)) { /* NA remains non-finite; excluded */ } t.tmp[row]=v; }
         for(int r=0;r<n;++r){ double v=t.tmp[r]; if(R_FINITE(v)){ t.tmpi.push_back(r); t.tmp2.push_back(v); any_finite=true; } }
         if(!any_finite){ pm.ok_local[lp]=0; continue; }
-        TLS &t2=tls(); t2.tmp2=t.tmp2; double med=median_inplace(t2.tmp2); double mad=mad_scaled_tls_from_vec(t.tmp2, med); if(!(mad>0.0)){ pm.ok_local[lp]=0; continue; }
-        double inv_k=1.0/(9.0*mad); int m=(int)t.tmp2.size();
+        TLS &t2=tls(); t2.tmp2=t.tmp2; double med=median_inplace(t2.tmp2); double mad=mad_raw_tls_from_vec(t.tmp2, med); if(!(mad>0.0)){ pm.ok_local[lp]=0; continue; }
+         int m=(int)t.tmp2.size();
         if(m==n){ int dpos=(int)pm.D.cols.size(); pm.is_dense[lp]=1; pm.map_dense[lp]=dpos; pm.ok_local[lp]=1; pm.D.cols.push_back(gj); pm.D.sumsq.push_back(0.0); pm.D.ok.push_back(1);
-            size_t old=pm.D.mv.size(); pm.D.mv.resize(old+(size_t)n); double *out=pm.D.mv.data()+old; double ss=0.0; midvariates_dense_compute(t.tmp.data(), n, med, inv_k, out, ss); pm.D.sumsq.back()=ss;
+            size_t old=pm.D.mv.size(); pm.D.mv.resize(old+(size_t)n); double *out=pm.D.mv.data()+old; double ss=0.0; midvariates_dense_compute(t.tmp.data(), n, med, mad, out, ss); pm.D.sumsq.back()=ss;
         } else {
             int spos=(int)pm.S.cols.size(); pm.is_dense[lp]=0; pm.map_sparse[lp]=spos; pm.ok_local[lp]=1; pm.S.cols.push_back(gj); pm.S.sumsq.push_back(0.0); pm.S.ok.push_back(1);
             size_t base_off=pm.S.idx.size(); pm.S.idx.resize(base_off+(size_t)m); pm.S.mv.resize(base_off+(size_t)m);
@@ -489,7 +500,7 @@ static inline void build_panel_mixed_from_csc(const int *Cp, const int *Ci, cons
             // row-index order before computing midvariates so pm.S.mv[q]
             // remains aligned with pm.S.idx[q].
             for(int q=0;q<m;++q) t.tmp2[q]=t.tmp[t.tmpi[q]];
-            double ss=0.0; midvariates_dense_compute(t.tmp2.data(), m, med, inv_k, pm.S.mv.data()+base_off, ss); pm.S.sumsq.back()=ss;
+            double ss=0.0; midvariates_dense_compute(t.tmp2.data(), m, med, mad, pm.S.mv.data()+base_off, ss); pm.S.sumsq.back()=ss;
             for(int q=0;q<m;++q) pm.S.idx[base_off+q]=(I)t.tmpi[q]; pm.S.off.push_back(base_off+(size_t)m);
             if(should_build_bitset<I>(n,m)){ pm.S.has_bits.push_back(1); pm.S.bits.emplace_back(); pm.S.bits.back().init_zero(n); for(int q=0;q<m;++q) pm.S.bits.back().set(t.tmpi[q]); }
             else { pm.S.has_bits.push_back(0); pm.S.bits.emplace_back(); }
@@ -599,9 +610,10 @@ static inline bool topk_pair_better(const pair<int,double>& a, const pair<int,do
 
 static inline void shrink_topk_buffer(vector<pair<int,double>> &buf, int K){
     if (K < 1) { buf.clear(); return; }
-    if ((int)buf.size() > 4*K) {
-        std::nth_element(buf.begin(), buf.begin() + (2*K - 1), buf.end(), topk_pair_better);
-        buf.resize(2*K);
+    const size_t k = static_cast<size_t>(K);
+    if (k <= std::numeric_limits<size_t>::max()/4 && buf.size() > 4*k) {
+        std::nth_element(buf.begin(), buf.begin() + (2*k - 1), buf.end(), topk_pair_better);
+        buf.resize(2*k);
     }
 }
 
@@ -612,6 +624,7 @@ static inline void tiny_topk_consider(vector<pair<int,double>> &buf, int K, int 
 }
 
 static inline void tiny_topk_finalize(vector<pair<int,double>> &buf, int K){
+    if (K < 1) { buf.clear(); return; }
     if (buf.empty()) return;
     const int keep = (int)std::min((size_t)K, buf.size());
     std::nth_element(buf.begin(), buf.begin()+keep-1, buf.end(), topk_pair_better);
@@ -669,7 +682,7 @@ static inline void set_knn_factor_levels(SEXP rcol1, SEXP rcol2, SEXP _x, int px
     }
 }
 
-static inline bool in_upper_triangle(int gi, int gj, bool strict){ return gi < gj || (!strict && gi==gj); }
+[[maybe_unused]] static inline bool in_upper_triangle(int gi, int gj, bool strict){ return gi < gj || (!strict && gi==gj); }
 
 } // namespace
 
@@ -778,7 +791,7 @@ SEXP C_bicor(SEXP _x, SEXP _y, SEXP _pairwise, SEXP _use_inter_den, SEXP _envir)
             const int Pb = use16 ? sparse_panel_cols<uint16_t>(n, (haveY?py:px), mem_mb) : sparse_panel_cols<uint32_t>(n, (haveY?py:px), mem_mb);
             vector<int> colsA(Pa), colsB(Pb);
             auto compute_tile = [&](auto &PX, auto &PY, bool triangular_same_panel){
-                const int Pxa=PX.P, Pya=PY.P; const int O=omp_thresh();
+                const int Pxa=PX.P, Pya=PY.P; [[maybe_unused]] const int O=omp_thresh();
 #ifdef _OPENMP
 #pragma omp parallel for schedule(dynamic,1) if (Pya >= O) num_threads(bgns_omp_threads())
 #endif
@@ -889,7 +902,7 @@ SEXP C_bicor(SEXP _x, SEXP _y, SEXP _pairwise, SEXP _use_inter_den, SEXP _envir)
         if(haveY){ SEXP ydn=Rf_getAttrib(_y,R_DimNamesSymbol); if(!Rf_isNull(ydn)&&Rf_xlength(ydn)==2) ycols=VECTOR_ELT(ydn,1); }
         const bool have_xcols=!Rf_isNull(xcols), have_ycols=!Rf_isNull(ycols);
         if(have_xcols || (haveY && have_ycols)){ SEXP rdm; rprotect(rdm = RSaneAllocVector(VECSXP,2));
-            SET_VECTOR_ELT(rdm,0, have_xcols?xcols:R_NilValue); if(haveY) SET_VECTOR_ELT(rdm,1, have_ycols?ycols:(have_xcols?xcols:R_NilValue)); else SET_VECTOR_ELT(rdm,1, have_xcols?xcols:R_NilValue);
+            SET_VECTOR_ELT(rdm,0, have_xcols?xcols:R_NilValue); if(haveY) SET_VECTOR_ELT(rdm,1, have_ycols?ycols:R_NilValue); else SET_VECTOR_ELT(rdm,1, have_xcols?xcols:R_NilValue);
             Rf_setAttrib(answer, R_DimNamesSymbol, rdm);
         } else if (haveY){ SEXP rdm; rprotect(rdm = RSaneAllocVector(VECSXP,2)); SET_VECTOR_ELT(rdm,0,R_NilValue); SET_VECTOR_ELT(rdm,1,R_NilValue); Rf_setAttrib(answer, R_DimNamesSymbol, rdm); }
     } catch(const std::bad_alloc&) { rerror("Out of memory"); }
@@ -1053,7 +1066,7 @@ SEXP C_bicor_tidy(SEXP _x, SEXP _y, SEXP _pairwise, SEXP _threshold, SEXP _use_i
                 if (R_FINITE(r) && std::fabs(r) >= threshold) { out_i.push_back(gi+1); out_j.push_back(gj+1); out_r.push_back(r); }
             };
             auto compute_tile = [&](auto &PX, auto &PY, bool triangular_same_panel){
-                const int Pxa=PX.P, Pya=PY.P; const int O=omp_thresh();
+                const int Pxa=PX.P, Pya=PY.P; [[maybe_unused]] const int O=omp_thresh();
 #ifdef _OPENMP
 #pragma omp parallel for schedule(dynamic,1) if (Pya >= O) num_threads(bgns_omp_threads())
 #endif
@@ -1170,7 +1183,7 @@ SEXP C_bicor_tidy(SEXP _x, SEXP _y, SEXP _pairwise, SEXP _threshold, SEXP _use_i
                             if (Rf_isReal(_x)) build_panel_mixed_from_real<uint16_t>(REAL(_x), n, colsB.data(), pb, PY);
                             else               build_panel_mixed_from_int <uint16_t>(INTEGER(_x), n, colsB.data(), pb, PY);
                         } else { CSCRef X; load_csc(_x,X); build_panel_mixed_from_csc<uint16_t>(X.p,X.i,X.x,n, colsB.data(), pb, PY); }
-                        for (int i0=0;i0<px;i0+=Pa) { bgns_check_interrupt();
+                        for (int i0=0;i0<=j0;i0+=Pa) { bgns_check_interrupt();
                             const int pa=min(Pa, px-i0); for (int i=0;i<pa;++i) colsA[i]=i0+i;
                             PanelMixed<uint16_t> PX;
                             if (x_is_mat) {
@@ -1185,7 +1198,7 @@ SEXP C_bicor_tidy(SEXP _x, SEXP _y, SEXP _pairwise, SEXP _threshold, SEXP _use_i
                             if (Rf_isReal(_x)) build_panel_mixed_from_real<uint32_t>(REAL(_x), n, colsB.data(), pb, PY);
                             else               build_panel_mixed_from_int <uint32_t>(INTEGER(_x), n, colsB.data(), pb, PY);
                         } else { CSCRef X; load_csc(_x,X); build_panel_mixed_from_csc<uint32_t>(X.p,X.i,X.x,n, colsB.data(), pb, PY); }
-                        for (int i0=0;i0<px;i0+=Pa) { bgns_check_interrupt();
+                        for (int i0=0;i0<=j0;i0+=Pa) { bgns_check_interrupt();
                             const int pa=min(Pa, px-i0); for (int i=0;i<pa;++i) colsA[i]=i0+i;
                             PanelMixed<uint32_t> PX;
                             if (x_is_mat) {
@@ -1256,7 +1269,8 @@ static SEXP bicor_knn_impl(SEXP _x, SEXP _y, SEXP _knn, SEXP _pairwise, SEXP _th
         if (haveY && Rf_nrows(_y) != n) verror("x and y must have same number of rows");
 
         if (Rf_xlength(_knn) != 1) verror("\"knn\" must be length 1");
-        const int K = Rf_asInteger(_knn); if (K < 1) verror("\"knn\" must be >= 1");
+        const int requested_k = Rf_asInteger(_knn); if (requested_k < 1) verror("knn must be >= 1");
+        const int K = std::min(requested_k, std::max(0, px - (haveY ? 0 : 1)));
         const int pairwise_lgl = Rf_asLogical(_pairwise);
         if (pairwise_lgl == NA_LOGICAL) verror("\"pairwise.complete.obs\" must be TRUE or FALSE");
         const bool pairwise_complete = (pairwise_lgl == TRUE);
@@ -1737,7 +1751,8 @@ SEXP C_bicor_knn_spdem(SEXP _x, SEXP _y, SEXP _knn, SEXP _pairwise, SEXP _thresh
         else { load_csc(_y, Yc); if (Yc.nrow != n) verror("x and y must have same number of rows"); py = Yc.ncol; }
 
         if (Rf_xlength(_knn) != 1) verror("\"knn\" must be length 1");
-        const int K = Rf_asInteger(_knn); if (K < 1) verror("\"knn\" must be >= 1");
+        const int requested_k = Rf_asInteger(_knn); if (requested_k < 1) verror("knn must be >= 1");
+        const int K = std::min(requested_k, std::max(0, px - (haveY ? 0 : 1)));
         const int pairwise_lgl = Rf_asLogical(_pairwise);
         if (pairwise_lgl == NA_LOGICAL) verror("\"pairwise.complete.obs\" must be TRUE or FALSE");
         const bool pairwise_complete = (pairwise_lgl == TRUE);
@@ -1892,7 +1907,8 @@ SEXP C_bicor_knn_csc(SEXP _x, SEXP _y, SEXP _knn, SEXP _pairwise, SEXP _threshol
         CSCRef X; load_csc(_x, X); CSCRef Y; if (haveY){ load_csc(_y, Y); if (Y.nrow!=X.nrow) verror("x and y must have same number of rows"); }
         const int n=X.nrow, px=X.ncol, py=haveY?Y.ncol:px;
 
-        const int K = Rf_asInteger(_knn); if (K<1) verror("\"knn\" must be >= 1");
+        const int requested_k = Rf_asInteger(_knn); if (requested_k < 1) verror("knn must be >= 1");
+        const int K = std::min(requested_k, std::max(0, px - (haveY ? 0 : 1)));
         const int pairwise_lgl = Rf_asLogical(_pairwise);
         if (pairwise_lgl == NA_LOGICAL) verror("\"pairwise.complete.obs\" must be TRUE or FALSE");
         const bool pairwise_complete = (pairwise_lgl == TRUE);

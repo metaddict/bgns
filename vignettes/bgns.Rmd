@@ -1,7 +1,9 @@
 ---
 title: "bgns: Biweight Graph and Network Statistics"
 author: "Aditya Kshirsagar"
-output: rmarkdown::html_vignette
+output:
+  rmarkdown::html_vignette:
+    toc: true
 vignette: >
   %\VignetteIndexEntry{bgns: Biweight Graph and Network Statistics}
   %\VignetteEngine{knitr::rmarkdown}
@@ -9,137 +11,227 @@ vignette: >
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(
-  collapse = TRUE,
-  comment = "#>",
-  fig.width = 6,
-  fig.height = 4
-)
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>", error = FALSE)
 ```
 
-## Introduction
+## Scope
 
-`bgns` provides biweight midcorrelation and exact bicor-based k-nearest-neighbor
-KNN graph construction for dense and sparse numeric matrices. bgns builds graphs
-from robust correlation structure, supporting workflows where similarity is
-better represented by coordinated variation. The package supports dense matrices
-and sparse `Matrix::dgCMatrix` inputs, and the tidy and KNN paths are panelized
-so that a full dense similarity matrix does not need to be stored.
-
-The package expects rows to be observations and columns to be the items being
-compared, such as genes, cells, metacells, samples, or features.
+`bgns` estimates biweight midcorrelation and selects exact nearest neighbors
+from the resulting similarities. This vignette describes score calculation,
+edge selection, and incomplete-data handling through reproducible examples.
+The simulated measurements include positive and negative associations.
 
 ## Installation
 
+Source installation requires R >= 4.3.0, a C++17 compiler, and the numerical
+libraries configured for R. Install the appropriate
+[Rtools](https://cran.r-project.org/bin/windows/Rtools/) on Windows or follow
+the [R for macOS toolchain instructions](https://mac.r-project.org/tools/).
+OpenMP support is optional. WGCNA is not a runtime dependency.
+
 ```{r installation, eval=FALSE}
-install.packages("bgns")
+install.packages("remotes")
+remotes::install_github("metaddict/bgns")
 ```
 
-## Dense bicor
+## From measurements to a correlation graph
 
-```{r dense-bicor}
+Arrange observations in rows and the entities to be compared in columns.
+For expression data, this orientation determines whether the graph connects
+genes, cells, or metacells. Apply the normalization and feature-selection
+steps appropriate to the study before calculating similarities.
+
+```{r measurements}
 library(bgns)
-set.seed(1)
-x <- matrix(rnorm(240), nrow = 40, ncol = 6)
-x[sample(length(x), 8)] <- NA_real_
-colnames(x) <- paste0("item", seq_len(ncol(x)))
 
-cmat <- bicor(x)
-round(cmat[1:4, 1:4], 3)
+set.seed(11)
+x <- matrix(rnorm(80 * 6), nrow = 80, ncol = 6)
+colnames(x) <- paste0("item_", seq_len(ncol(x)))
+x[, 2] <- 0.8 * x[, 1] + 0.2 * rnorm(nrow(x))
+x[, 3] <- -0.7 * x[, 1] + 0.3 * rnorm(nrow(x))
+x[1:6, 4] <- NA_real_
+
+cm <- bicor(x, min_overlap = 3)
+round(cm, 3)
 ```
 
-For graph workflows, tidy output is often more useful than a dense matrix.
+For a dense input, `bicor(x)` returns the square matrix of column
+similarities. Supplying a second dense matrix produces an `ncol(x)` by
+`ncol(y)` result. Matrix output retains undefined entries as `NA`.
 
-```{r tidy-bicor}
-td <- bicor(x, tidy = TRUE, threshold = 0.1)
-head(td)
+### Selecting correlation edges
+
+An absolute-score cutoff retains associations of either sign:
+
+```{r correlation-edges}
+edges <- bicor(x, tidy = TRUE, threshold = 0.5)
+edges
 ```
 
-## Exact bicor KNN graphs
+The table reports column identifiers in `col1` and `col2`, and the signed
+score in `cor`. A self-comparison reports each eligible pair once, without
+the diagonal. For `bicor(x, y, tidy = TRUE)`, the identifiers refer to `x`
+and `y`, respectively.
 
-`bicor_knn()` returns a directed edge table. `col1` is the target column, `col2`
-is the selected neighbor, `val` is the bicor value, and `rank` is the within-target
-rank.
+### Selecting nearest neighbors
 
-```{r knn-bicor}
-kn <- bicor_knn(x, knn = 2, threshold = -Inf)
-kn
+```{r nearest-neighbors}
+kn <- bicor_knn(x, knn = 2, threshold = 0)
+head(kn)
 ```
 
-When `y` is supplied, neighbors are selected from columns of `x` for each target
-column in `y`.
+Here, `col1` denotes the target and `col2` its selected neighbor. `val` is
+the signed score, and `rank` orders neighbors within each target. Selection
+is directed: an edge need not be reciprocal. Self-neighbors are excluded
+when `y` is omitted, and fewer than `knn` edges are returned if too few
+candidates qualify.
 
-```{r bipartite-knn}
-y <- matrix(rnorm(160), nrow = 40, ncol = 4)
-colnames(y) <- paste0("target", seq_len(ncol(y)))
-head(bicor_knn(x, y, knn = 2, bipartite_levels = "separate"))
+The two selection rules are distinct:
+
+| Output | Eligibility rule | Ordering |
+| --- | --- | --- |
+| Correlation edges | `abs(cor) >= threshold` | No neighbor ranking |
+| KNN edges | `val > threshold` | Decreasing signed score within target |
+
+Consequently, a strong negative association can survive an absolute cutoff
+but fail a positive KNN cutoff. The default `threshold = -Inf` admits all
+finite scores, including negative values. The argument does not filter a
+dense correlation matrix.
+
+## Sparse measurements and cross-matrix neighbors
+
+To retain a defined robust scale, construct the sparse example by setting
+20% of the simulated measurements to zero. Convert the result to sparse
+storage after modifying the values.
+
+```{r sparse-measurements}
+set.seed(12)
+x_zero <- x
+index <- sample.int(length(x_zero), floor(0.2 * length(x_zero)))
+x_zero[index] <- 0
+xs <- Matrix::Matrix(x_zero, sparse = TRUE)
+
+edges_sparse <- bicor(xs, tidy = TRUE, threshold = 0.5)
+kn_sparse <- bicor_knn(xs, knn = 2, threshold = 0)
+head(edges_sparse)
+head(kn_sparse)
 ```
 
-Dense and sparse inputs can also be mixed in bipartite KNN calls.
+Sparse calculations accept double-valued `Matrix` classes that can be
+represented as `dgCMatrix`. Implicit entries contribute observed zeros.
+Sparse inputs require edge or KNN output; dense correlation-matrix output
+requires dense inputs. Internal working panels may nevertheless be dense.
 
-```{r mixed-knn}
-xs <- Matrix::rsparsematrix(40, 6, density = 0.3)
-head(bicor_knn(xs, y, knn = 2, threshold = -Inf, bipartite_levels = "separate"))
+For cross-matrix selection, align the observations of both inputs before
+calling the function. Row order is positional; row names are not matched.
+
+```{r cross-matrix-neighbors}
+set.seed(13)
+y <- cbind(
+  target_A = x[, 1] + rnorm(nrow(x), sd = 0.2),
+  target_B = x[, 3] + rnorm(nrow(x), sd = 0.2)
+)
+kn_xy <- bicor_knn(
+  xs, y, knn = 2, threshold = 0.5,
+  bipartite_levels = "separate"
+)
+kn_xy
 ```
 
-## Missing values and thresholds
+Each column of `y` is a target whose candidates are columns of `xs`.
+Accordingly, `col1` carries target names and `col2` carries source names.
+`bipartite_levels = "separate"` preserves these distinct name sets. Either
+input may use dense or sparse storage.
 
-With `pairwise.complete.obs = TRUE`, each edge is computed on its finite overlap.
-With `pairwise.complete.obs = FALSE`, KNN edges involving incomplete columns are
-not eligible.
+## Finite overlap and normalization
 
-```{r pairwise-complete}
-kn_pairwise <- bicor_knn(x, knn = 2, pairwise.complete.obs = TRUE)
-kn_complete <- bicor_knn(x, knn = 2, pairwise.complete.obs = FALSE)
+For each column, the implementation estimates a median and scaled median
+absolute deviation (MAD) from its finite observations. The scale is
+`1.4826 * median(abs(x - median(x)))`; biweight deviations use a tuning
+multiplier of 9. These columnwise estimates and weights remain fixed across
+pairwise comparisons.
 
-nrow(kn_pairwise)
-nrow(kn_complete)
+With `pairwise.complete.obs = TRUE`, the numerator combines weighted
+deviations only at observations finite in both columns. `NA`, `NaN`, and
+infinities are excluded; zeros are retained. The denominator is selected
+separately:
+
+- `use_intersection_denominator = FALSE` uses sums of squared weighted
+  deviations over each column's full set of finite observations.
+- `use_intersection_denominator = TRUE` restricts both sums to the shared
+  finite observations, without re-estimating the columnwise weights.
+
+The following example changes only the denominator convention:
+
+```{r overlap-normalization}
+x_missing <- x[, 1:2]
+x_missing[1:20, 2] <- NA_real_
+
+r_column <- bicor(x_missing, use_intersection_denominator = FALSE)[1, 2]
+r_shared <- bicor(x_missing, use_intersection_denominator = TRUE)[1, 2]
+c(column_denominator = r_column, shared_denominator = r_shared)
 ```
 
-The `threshold` argument in `bicor_knn()` is a signed cutoff applied before
-top-k selection; candidate bicor values must be strictly greater than the cutoff.
-For example, `threshold = 0` keeps only positive bicor edges.
+For fully observed pairs, the two conventions coincide. `min_overlap`
+specifies the required count of shared finite observations, independently
+of their robust weights; the default is 3. It applies to complete data too.
 
-```{r threshold}
-positive_edges <- bicor_knn(x, knn = 2, threshold = 0)
-positive_edges
+```{r overlap-eligibility}
+n_shared <- sum(is.finite(x_missing[, 1]) & is.finite(x_missing[, 2]))
+n_shared
+bicor(x_missing, min_overlap = n_shared + 1)[1, 2]
+bicor(x_missing, pairwise.complete.obs = FALSE)[1, 2]
 ```
 
-## Sparse matrices
+The first correlation is undefined because the overlap requirement exceeds
+the available observations. The second is undefined because
+`pairwise.complete.obs = FALSE` excludes comparisons involving an incomplete
+column. This option does not delete incomplete rows across the entire matrix.
 
-Sparse inputs are accepted through `Matrix::dgCMatrix`; other sparse `Matrix` classes are coerced to `dgCMatrix` when possible.
+## Undefined scores
 
-```{r sparse}
-xs <- Matrix::rsparsematrix(40, 6, density = 0.3)
-colnames(xs) <- paste0("s", seq_len(ncol(xs)))
+A zero MAD or undefined normalization makes bicor unavailable. This can
+occur even in a nonconstant column when most measurements are identical.
+Sparse storage does not alter that statistical condition.
 
-head(bicor(xs, tidy = TRUE, threshold = 0))
-bicor_knn(xs, knn = 2, threshold = 0)
+```{r degenerate-columns}
+z <- cbind(
+  variable = x[, 1],
+  constant = rep(1, nrow(x)),
+  zero_heavy = c(rep(0, 60), seq_len(20)),
+  all_missing = rep(NA_real_, nrow(x))
+)
+diag(bicor(z))
 ```
 
-## Relationship to related packages
+Undefined comparisons remain `NA` in matrix output, including ineligible
+diagonal entries, and are omitted from edge and KNN tables. Inspect column
+variability when expected vertices have no reported neighbors.
 
-`WGCNA` provides a mature ecosystem for weighted correlation network analysis,
-including module detection and network summaries. `bgns` is narrower: it focuses
-on memory-efficient bicor kernels and exact bicor KNN graph construction.
+## Resource configuration
 
-`BiocNeighbors` provides nearest-neighbor search infrastructure for standard
-geometric distances. `bgns` targets robust correlation-native KNN graphs where
-coordinated variation is the similarity signal of interest.
+The default KNN path (`direct_sparse = TRUE`) retains bounded candidate sets
+while processing similarities in panels. It avoids retaining a full dense
+similarity matrix, but exact self-KNN still evaluates a quadratic number of
+candidate pairs. A thresholded correlation table can itself approach
+quadratic size if most pairs qualify.
 
-## Runtime tuning
+`BGNS_MEM_MB` guides panel scratch allocation and defaults to 256 MB.
+Total process memory also includes inputs, returned results, preprocessing,
+and numerical-library workspace. `BGNS_NUM_THREADS` limits the package's
+OpenMP regions, with a default of at most two threads; BLAS threading is
+configured independently. Builds without OpenMP execute those regions
+serially.
 
-`BGNS_MEM_MB` controls the scratch-memory budget used for panelized computation.
-When OpenMP is available, `BGNS_NUM_THREADS` controls the maximum number of
-threads used by `bgns`; the default is at most two threads.
+When changing runtime controls, set them before the first computation:
 
-```{r runtime-tuning, eval=FALSE}
-Sys.setenv(BGNS_MEM_MB = 512, BGNS_NUM_THREADS = 2)
+```{r runtime-settings, eval=FALSE}
+Sys.setenv(BGNS_MEM_MB = "256", BGNS_NUM_THREADS = "2")
 ```
 
-## Internal execution engine
-
-Version 0.4.2 keeps the public API focused on `bicor()` and `bicor_knn()` but uses a stronger internal execution layer. Long-running panel loops use conservative thread control through `BGNS_NUM_THREADS`, bounded panel sizes through `BGNS_MEM_MB`, deterministic top-k buffers, sparse `dgCMatrix` summaries, optional runtime-gated SIMD kernels where available, and interrupt checks at panel boundaries. These pieces are internal and do not change the mathematical definition of the bicor score.
+Optional SIMD paths depend on the compiled target and runtime processor.
+See `help("bgns")` for additional controls. Specify the scientific overlap
+criterion through `min_overlap` rather than an environment variable.
 
 ## Session information
 

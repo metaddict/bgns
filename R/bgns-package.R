@@ -9,7 +9,7 @@
 #'
 #' @section Runtime tuning:
 #' \describe{
-#'   \item{\code{BGNS_MEM_MB}}{Scratch-memory budget in MB for panelization. Default: 256.}
+#'   \item{\code{BGNS_MEM_MB}}{Scratch-memory budget in MB for panelization, not a total-memory limit. Default: 256.}
 #'   \item{\code{BGNS_MIN_OVERLAP}}{Minimum finite overlap used by native code. Usually set through \code{min_overlap}.}
 #'   \item{\code{BGNS_NUM_THREADS}}{Maximum OpenMP threads used by bgns. Default: 2 when OpenMP is available and lower if OpenMP is unavailable.}
 #'   \item{\code{BGNS_BITSET_BETA}}{Controls adaptive bitset construction on sparse overlap paths. Default: 0.75.}

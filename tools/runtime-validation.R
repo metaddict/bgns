@@ -3,7 +3,7 @@ suppressPackageStartupMessages({
   library(Matrix)
 })
 
-stopifnot(as.character(utils::packageVersion("bgns")) == "0.4.2")
+stopifnot(as.character(utils::packageVersion("bgns")) == "0.4.3")
 
 # Dense, rectangular, tidy and KNN smoke tests.
 set.seed(42)

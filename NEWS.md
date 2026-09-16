@@ -1,3 +1,14 @@
+# bgns 0.4.3
+
+* Emit each tidy self-correlation edge once across processing panels.
+* Bound neighbor counts by available candidates and prevent integer overflow in top-k buffers.
+* Preserve independent dimension names for rectangular correlation matrices.
+* Require unique, non-missing column names for named edge outputs.
+* Use bounded weighted deviations to improve numerical stability under extreme rescaling while preserving the documented estimator.
+* Initialize optional SIMD dispatch safely when panel workers start concurrently.
+* Validate the estimator against an independent R reference and remove the incompatible WGCNA equality assertion and unused suggested dependency.
+* Expand regression coverage and align sparse help examples and runtime-control documentation.
+
 # bgns 0.4.2
 
 * Prepared the source tree for CRAN review: corrected package metadata and the source-level CITATION evaluation.

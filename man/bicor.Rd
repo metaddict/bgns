@@ -31,6 +31,17 @@ between two columns. The requirement also applies when both columns are fully
 finite. Defaults to 3.}
 }
 \details{
+Column medians and scaled MADs (constant 1.4826) are estimated from finite
+observations. Biweight deviations use a tuning multiplier of 9. These estimates
+and weights are fixed before pairwise comparisons. The numerator uses shared
+finite observations; by default, the denominator uses full-column sums of
+squared weighted deviations. Setting \code{use_intersection_denominator = TRUE}
+restricts the sums to shared observations without refitting the weights.
+Implicit sparse entries are observed zeros. Row matching is positional.
+
+Named edge outputs require unique, non-missing column names within each input.
+Unnamed inputs use column indices.
+
 Input orientation is rows as observations and columns as variables, genes, cells,
 metacells, or other items to be compared.
 
@@ -58,7 +69,9 @@ cm
 td <- bicor(x, tidy = TRUE, threshold = 0.1)
 head(td)
 
-xs <- Matrix::rsparsematrix(12, 5, density = 0.4)
+x_sparse <- x
+x_sparse[sample.int(length(x_sparse), 12)] <- 0
+xs <- Matrix::Matrix(x_sparse, sparse = TRUE)
 head(bicor(xs, tidy = TRUE, threshold = 0))
 }
 \seealso{\code{\link{bicor_knn}}}
