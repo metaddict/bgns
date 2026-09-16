@@ -53,7 +53,7 @@ and the libraries required by your R installation are therefore necessary.
 Use the matching [Rtools](https://cran.r-project.org/bin/windows/Rtools/) on
 Windows or the recommended [R for macOS build tools](https://mac.r-project.org/tools/)
 on macOS. OpenMP is optional; a build without it uses serial execution for
-BGNS's own parallel regions. WGCNA is not required for normal use.
+BGNS's own parallel regions. 
 
 ## Usage
 
