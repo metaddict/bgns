@@ -1,28 +1,33 @@
 Package: bgns
-Title: BGNS: Biweight Graph and Network Statistics
-Version: 0.1.0
+Type: Package
+Title: Biweight Graph and Network Statistics
+Version: 0.4.3
 Authors@R: c(
-    person(given = "Aditya", family = "Kshirsagar", email = "80492831+metaddict@users.noreply.github.com", role = c("aut", "cre"))
- )
-Description: Robust biweight midcorrelation (bicor) kernels with NA-aware
-    pairwise handling, plus KNN/graph construction and clustering wrappers
-    compatible with tgstat graph utilities. The C++ core uses a strict
-    pairwise formulation with an optimized BLAS fast path on NA-free data,
-    yielding robust, outlier-resistant similarity graphs at scale.
+    person("Aditya", "Kshirsagar", role = c("aut", "cre"),
+           email = "adityaksh4@gmail.com")
+  )
+Description: Provides memory-efficient biweight midcorrelation and exact
+    bicor-based k-nearest-neighbor graph construction for dense and sparse
+    numeric matrices. Dense, sparse, and mixed-input paths avoid materializing
+    full dense similarity matrices for tidy and k-nearest-neighbor workflows
+    where possible. The implementation supports pairwise finite-overlap
+    handling and robust correlation-based graph construction for biological
+    expression matrices and other high-dimensional numeric data.
+License: GPL-3
+Encoding: UTF-8
 Depends:
-    R (>= 4.0)
+    R (>= 4.3.0)
 Imports:
-    tgstat,
-    Matrix
+    Matrix,
+    methods,
+    stats
 Suggests:
     knitr,
-    rmarkdown
-License: License: MIT + file LICENSE
-Encoding: UTF-8
-RoxygenNote: 7.3.2
-SystemRequirements: C++17, OpenMP (optional)
-BugReports: https://github.com/metaddict/bgns/issues
+    rmarkdown,
+    testthat (>= 3.0.0)
+SystemRequirements: C++17, optional OpenMP
+VignetteBuilder: knitr
+Config/testthat/edition: 3
+NeedsCompilation: yes
 URL: https://github.com/metaddict/bgns
-Roxygen: list(markdown = TRUE)
-LazyLoad: no
-ByteCompile: no
+BugReports: https://github.com/metaddict/bgns/issues

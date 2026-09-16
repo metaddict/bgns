@@ -1,345 +1,272 @@
-# --- Package doc / imports / native registration -----------------------------
+.is_dgc <- function(x) inherits(x, "dgCMatrix")
+.is_sparse_matrix <- function(x) inherits(x, "sparseMatrix")
+.as_dgc_if_sparse <- function(x, name) {
+  if (.is_dgc(x) || !.is_sparse_matrix(x)) return(x)
 
-#' bgns: Biweight Graph and Network Statistics (BGNS)
-#'
-#' Robust biweight midcorrelation (bicor) kernels with NA-aware pairwise
-#' handling, KNN/graph construction, and clustering wrappers compatible with
-#' tgstat graph utilities. Optimized BLAS paths are used when inputs are NA-free
-#' for speed.
-#'
-#' @name bgns
-#' @aliases bgns-package BGNS
-#' @useDynLib bgns, .registration = TRUE, .fixes = "C_"
-#' @import tgstat
-#' @importFrom Matrix t drop0
-"_PACKAGE"
+  # Matrix >= 1.7 deprecates direct coercion from some concrete sparse
+  # classes (for example dgTMatrix) straight to dgCMatrix. Follow Matrix's
+  # virtual-class coercion path instead. The native backend accepts numeric
+  # double sparse matrices only, matching the package's documented input type.
+  if (!inherits(x, "dMatrix")) {
+    stop(sprintf("%s must be a numeric sparse matrix", name), call. = FALSE)
+  }
+  out <- methods::as(x, "CsparseMatrix")
+  if (!inherits(out, "generalMatrix")) {
+    out <- methods::as(out, "generalMatrix")
+  }
+  if (!inherits(out, "dgCMatrix")) {
+    stop(sprintf("%s could not be converted to a numeric dgCMatrix", name),
+         call. = FALSE)
+  }
+  out
+}
 
-.coerce_dense <- function(x) {
-  if (inherits(x, "dgCMatrix")) {
-    return(as.matrix(x))
+.bgns_scalar_logical <- function(x, name) {
+  if (!is.logical(x) || length(x) != 1L || is.na(x)) {
+    stop(sprintf("%s must be TRUE or FALSE", name), call. = FALSE)
   }
   x
 }
 
-.tgs_use_blas <- function() isTRUE(getOption("tgs_use.blas", FALSE))
-
-.bicor_finite <- function(x) {
-  if (inherits(x, "dgCMatrix")) {
-    return(isTRUE(all(is.finite(x@x))))
+.bgns_edge_names <- function(x, name) {
+  nm <- colnames(x)
+  if (!is.null(nm) && (anyNA(nm) || anyDuplicated(nm))) {
+    stop(sprintf("%s column names must be unique and non-missing for edge output", name),
+         call. = FALSE)
   }
-  isTRUE(all(is.finite(as.matrix(x))))
+  invisible(NULL)
 }
 
-.labels_or_index <- function(nms, n) {
-  if (!is.null(nms) && length(nms) == n) nms else as.character(seq_len(n))
+.bgns_scalar_number <- function(x, name, allow_infinite = FALSE) {
+  if (!is.numeric(x) || length(x) != 1L || is.na(x) ||
+      (!allow_infinite && !is.finite(x))) {
+    stop(sprintf("%s must be a single %s number", name,
+                 if (allow_infinite) "non-missing" else "finite"),
+         call. = FALSE)
+  }
+  x
 }
 
-#' Robust biweight midcorrelation (bicor)
+.bgns_positive_integer <- function(x, name) {
+  if (!is.numeric(x) || length(x) != 1L || is.na(x) || !is.finite(x) ||
+      x < 1 || x != floor(x) || x > .Machine$integer.max) {
+    stop(sprintf("%s must be a single positive integer", name), call. = FALSE)
+  }
+  as.integer(x)
+}
+
+.bgns_with_envvar <- function(name, value, thunk) {
+  old <- Sys.getenv(name, unset = NA_character_)
+  had <- !is.na(old)
+  on.exit({
+    if (had) do.call(Sys.setenv, stats::setNames(list(old), name)) else Sys.unsetenv(name)
+  }, add = TRUE)
+  if (is.null(value)) Sys.unsetenv(name) else do.call(Sys.setenv, stats::setNames(list(value), name))
+  thunk()
+}
+
+#' Robust biweight midcorrelation
 #'
-#' @param x numeric matrix (rows = observations, columns = items)
-#' @param y optional numeric matrix with the same number of rows as `x`
-#' @param pairwise.complete.obs logical; TRUE = strict pairwise
-#' @param spearman ignored (kept for tgs_cor API parity)
-#' @param tidy logical; if TRUE, return tidy data.frame with (col1, col2, cor)
-#' @param threshold numeric; keep pairs with |cor| >= threshold (tidy mode only)
-#' @param use_intersection_denominator logical; stricter normalization
-#' @return matrix (auto/cross) or tidy data.frame
+#' @param x numeric matrix with rows as observations and columns as items, or a
+#'   sparse `dgCMatrix` when `tidy = TRUE`.
+#' @param y optional numeric matrix or `dgCMatrix` with the same number of rows
+#'   as `x`.
+#' @param pairwise.complete.obs logical. If `TRUE`, correlations are computed on
+#'   finite pairwise overlap. If `FALSE`, pairs involving incomplete columns are
+#'   omitted or returned as `NA`, depending on output mode.
+#' @param spearman logical; accepted for API compatibility and ignored.
+#' @param tidy logical. If `TRUE`, return a tidy edge table with columns `col1`,
+#'   `col2`, and `cor`.
+#' @param threshold numeric. In tidy mode, keep pairs with `abs(cor) >= threshold`.
+#' @param use_intersection_denominator logical. For sparse or incomplete columns,
+#'   use the overlap-specific denominator rather than full-column sums of squares.
+#' @param min_overlap integer. Minimum number of shared finite observations
+#'   required between two columns, including fully finite paths.
+#' @return A dense correlation matrix for dense inputs when `tidy = FALSE`, or a
+#'   data frame with columns `col1`, `col2`, and `cor` when `tidy = TRUE`.
+#' @details Column medians and scaled MADs (constant 1.4826) are estimated from
+#'   finite observations, with a biweight tuning multiplier of 9. These estimates
+#'   and weights stay fixed across pairs. Numerators use shared finite rows;
+#'   denominators use full-column sums of squared weighted deviations unless
+#'   `use_intersection_denominator = TRUE` restricts them to the overlap.
+#'   Implicit sparse entries are observed zeros. Row matching is positional.
+#'   Named edge outputs require unique, non-missing column names within each
+#'   input. Unnamed inputs use column indices.
 #' @export
 bicor <- function(
   x,
   y = NULL,
   pairwise.complete.obs = TRUE,
-  spearman = FALSE, # ignored
+  spearman = FALSE,
   tidy = FALSE,
-  threshold = 0,
-  use_intersection_denominator = FALSE
+  threshold = -Inf,
+  use_intersection_denominator = FALSE,
+  min_overlap = 3
 ) {
-  if (missing(x)) {
-    stop(
-      "Usage: bicor(x, y = NULL, pairwise.complete.obs = TRUE, spearman = FALSE, tidy = FALSE, threshold = 0)",
-      call. = FALSE
-    )
-  }
-  x <- .coerce_dense(x)
-  if (!is.null(y)) {
-    y <- .coerce_dense(y)
+  if (missing(x)) stop("bicor: 'x' is required", call. = FALSE)
+  x <- .as_dgc_if_sparse(x, "x")
+  if (!is.null(y)) y <- .as_dgc_if_sparse(y, "y")
+
+  pairwise.complete.obs <- .bgns_scalar_logical(pairwise.complete.obs, "pairwise.complete.obs")
+  tidy <- .bgns_scalar_logical(tidy, "tidy")
+  use_intersection_denominator <- .bgns_scalar_logical(
+    use_intersection_denominator,
+    "use_intersection_denominator"
+  )
+  threshold <- .bgns_scalar_number(threshold, "threshold", allow_infinite = TRUE)
+  min_overlap <- .bgns_positive_integer(min_overlap, "min_overlap")
+
+  if (!identical(spearman, FALSE)) {
+    warning("spearman is accepted for API compatibility but ignored; bicor computes biweight midcorrelation.", call. = FALSE)
   }
 
-  if (is.null(y)) {
-    C <- .Call(
-      "C_bicor",
+  if (isTRUE(tidy)) {
+    .bgns_edge_names(x, "x")
+    if (!is.null(y)) .bgns_edge_names(y, "y")
+    return(.bgns_with_envvar("BGNS_MIN_OVERLAP", min_overlap, function() .Call(
+      C_C_bicor_tidy,
       x,
-      NULL,
-      isTRUE(pairwise.complete.obs),
-      isTRUE(use_intersection_denominator),
-      new.env(parent = parent.frame()),
-      PACKAGE = "bgns"
-    )
-  } else {
-    C <- .Call(
-      "C_bicor",
-      x,
-      y,
-      isTRUE(pairwise.complete.obs),
-      isTRUE(use_intersection_denominator),
-      new.env(parent = parent.frame()),
-      PACKAGE = "bgns"
-    )
+      if (is.null(y)) NULL else y,
+      pairwise.complete.obs,
+      threshold,
+      use_intersection_denominator,
+      new.env(parent = parent.frame())
+    )))
   }
 
-  if (!isTRUE(tidy)) {
-    return(C)
+  if (.is_dgc(x) || (!is.null(y) && .is_dgc(y))) {
+    stop("bicor(tidy = FALSE) requires dense matrices. Use tidy = TRUE for sparse inputs or explicitly coerce.", call. = FALSE)
   }
 
-  # tidy formatting (tgstat style)
-  if (is.null(y)) {
-    p <- ncol(x)
-    has_names <- !is.null(colnames(x)) && length(colnames(x)) == p
-    rn <- if (has_names) colnames(x) else NULL
-    keep <- which(
-      upper.tri(C, diag = FALSE) & abs(C) >= threshold,
-      arr.ind = TRUE
-    )
-    if (!nrow(keep)) {
-      return(data.frame(col1 = integer(), col2 = integer(), cor = numeric()))
-    }
-    # Order by (row i, col j) to match tgstat's tidy ordering
-    ord <- order(keep[, 1], keep[, 2])
-    keep <- keep[ord, , drop = FALSE]
-    i <- keep[, 1]
-    j <- keep[, 2]
-    if (has_names) {
-      data.frame(
-        col1 = factor(i, levels = seq_len(p), labels = rn),
-        col2 = factor(j, levels = seq_len(p), labels = rn),
-        cor = C[as.matrix(keep)],
-        stringsAsFactors = TRUE
-      )
-    } else {
-      data.frame(
-        col1 = as.integer(i),
-        col2 = as.integer(j),
-        cor = C[as.matrix(keep)]
-      )
-    }
-  } else {
-    px <- ncol(x)
-    py <- ncol(y)
-    has_names_x <- !is.null(colnames(x)) && length(colnames(x)) == px
-    has_names_y <- !is.null(colnames(y)) && length(colnames(y)) == py
-    rn_x <- if (has_names_x) colnames(x) else NULL
-    rn_y <- if (has_names_y) colnames(y) else NULL
-    val <- as.double(C) # column-major over Y (groups by j)
-    keep <- which(abs(val) >= threshold)
-    if (!length(keep)) {
-      return(data.frame(col1 = integer(), col2 = integer(), cor = numeric()))
-    }
-    j <- ((keep - 1L) %/% px) + 1L
-    i <- ((keep - 1L) %% px) + 1L
-    data.frame(
-      col1 = if (has_names_x) {
-        factor(i, levels = seq_len(px), labels = rn_x)
-      } else {
-        as.integer(i)
-      },
-      col2 = if (has_names_y) {
-        factor(j, levels = seq_len(py), labels = rn_y)
-      } else {
-        as.integer(j)
-      },
-      cor = val[keep],
-      stringsAsFactors = has_names_x || has_names_y
-    )
-  }
+  .bgns_with_envvar("BGNS_MIN_OVERLAP", min_overlap, function() .Call(
+    C_C_bicor,
+    x,
+    if (is.null(y)) NULL else y,
+    pairwise.complete.obs,
+    use_intersection_denominator,
+    new.env(parent = parent.frame())
+  ))
 }
 
-#' KNN by bicor
+#' k-nearest neighbors by biweight midcorrelation
 #'
-#' @param x numeric matrix (rows = observations, columns = items)
-#' @param y optional numeric matrix with the same number of rows as `x`
-#' @param knn neighbors per target
-#' @param pairwise.complete.obs logical; TRUE = strict pairwise
-#' @param threshold numeric; keep edges >= threshold before K selection
-#' @param use_intersection_denominator logical
-#' @return data.frame with columns col1, col2, val, rank
+#' @param x numeric matrix or `dgCMatrix` with rows as observations and columns
+#'   as source items.
+#' @param y optional numeric matrix or `dgCMatrix` with the same number of rows
+#'   as `x`. When supplied, neighbors are selected from columns of `x` for each
+#'   target column of `y`.
+#' @param knn integer. Maximum number of neighbors per target column. Requests
+#'   exceeding the available candidates return all eligible neighbors.
+#' @param pairwise.complete.obs logical. If `TRUE`, compute each candidate edge on
+#'   the finite overlap for that column pair. If `FALSE`, only pairs where both
+#'   preprocessed columns are complete are eligible.
+#' @param threshold numeric. Signed cutoff applied before top-k selection;
+#'   candidate bicor values must be strictly greater than `threshold`.
+#' @param use_intersection_denominator logical. Use overlap-specific denominators
+#'   for incomplete or sparse paths.
+#' @param direct_sparse logical. If `TRUE`, stream top-k edges without dense
+#'   similarity intermediates.
+#' @param bipartite_levels one of `"strict"` or `"separate"`. Use `"separate"`
+#'   when `x` and `y` have distinct column-name levels.
+#' @param min_overlap integer. Minimum number of shared finite observations
+#'   required between two columns, including fully finite paths.
+#' @return A data frame with columns `col1`, `col2`, `val`, and `rank`.
+#' @details Column medians and scaled MADs (constant 1.4826) are estimated from
+#'   finite observations, with a biweight tuning multiplier of 9. These estimates
+#'   and weights stay fixed across pairs. Numerators use shared finite rows;
+#'   denominators use full-column sums of squared weighted deviations unless
+#'   `use_intersection_denominator = TRUE` restricts them to the overlap.
+#'   Implicit sparse entries are observed zeros. Row matching is positional.
+#'   Named edge outputs require unique, non-missing column names within each
+#'   input. Unnamed inputs use column indices.
 #' @export
 bicor_knn <- function(
   x,
   y = NULL,
   knn,
   pairwise.complete.obs = TRUE,
-  threshold = 0,
-  use_intersection_denominator = FALSE
+  threshold = -Inf,
+  use_intersection_denominator = FALSE,
+  direct_sparse = TRUE,
+  bipartite_levels = c("strict", "separate"),
+  min_overlap = 3
 ) {
-  if (missing(x) || missing(knn)) {
-    stop(
-      "Usage: bicor_knn(x, y, knn, pairwise.complete.obs = TRUE, threshold = 0)",
-      call. = FALSE
-    )
-  }
-  x <- .coerce_dense(x)
-  if (!is.null(y)) {
-    y <- .coerce_dense(y)
-  }
+  if (missing(x) || missing(knn)) stop("bicor_knn: 'x' and 'knn' are required", call. = FALSE)
+  x <- .as_dgc_if_sparse(x, "x")
+  if (!is.null(y)) y <- .as_dgc_if_sparse(y, "y")
 
-  if (is.null(y)) {
+  knn <- .bgns_positive_integer(knn, "knn")
+  pairwise.complete.obs <- .bgns_scalar_logical(pairwise.complete.obs, "pairwise.complete.obs")
+  threshold <- .bgns_scalar_number(threshold, "threshold", allow_infinite = TRUE)
+  use_intersection_denominator <- .bgns_scalar_logical(
+    use_intersection_denominator,
+    "use_intersection_denominator"
+  )
+  direct_sparse <- .bgns_scalar_logical(direct_sparse, "direct_sparse")
+  min_overlap <- .bgns_positive_integer(min_overlap, "min_overlap")
+  bipartite_levels <- match.arg(bipartite_levels)
+  .bgns_edge_names(x, "x")
+  if (!is.null(y)) .bgns_edge_names(y, "y")
+
+  thunk_dense <- function() {
     .Call(
-      "C_bicor_knn",
+      C_C_bicor_knn_opts,
       x,
-      NULL,
-      as.integer(knn),
-      as.numeric(threshold),
-      isTRUE(use_intersection_denominator),
-      new.env(parent = parent.frame()),
-      PACKAGE = "bgns"
+      if (is.null(y)) NULL else y,
+      knn,
+      pairwise.complete.obs,
+      threshold,
+      use_intersection_denominator,
+      direct_sparse,
+      new.env(parent = parent.frame())
     )
-  } else {
+  }
+  thunk_csc <- function() {
     .Call(
-      "C_bicor_knn",
+      C_C_bicor_knn_csc,
+      x,
+      if (is.null(y)) NULL else y,
+      knn,
+      pairwise.complete.obs,
+      threshold,
+      use_intersection_denominator,
+      direct_sparse,
+      new.env(parent = parent.frame())
+    )
+  }
+  thunk_spdem <- function() {
+    .Call(
+      C_C_bicor_knn_spdem,
       x,
       y,
-      as.integer(knn),
-      as.numeric(threshold),
-      isTRUE(use_intersection_denominator),
-      new.env(parent = parent.frame()),
-      PACKAGE = "bgns"
+      knn,
+      pairwise.complete.obs,
+      threshold,
+      use_intersection_denominator,
+      direct_sparse,
+      new.env(parent = parent.frame())
     )
   }
+
+  wrap_minov <- function(thunk) .bgns_with_envvar("BGNS_MIN_OVERLAP", min_overlap, thunk)
+  wrap_levels <- function(thunk) {
+    if (!is.null(y) && identical(bipartite_levels, "separate")) {
+      .bgns_with_envvar("BGNS_KNN_BIPARTITE_LEVELS", "separate", function() wrap_minov(thunk))
+    } else {
+      wrap_minov(thunk)
+    }
+  }
+
+  x_dgc <- .is_dgc(x)
+  y_dgc <- !is.null(y) && .is_dgc(y)
+
+  if (is.null(y)) {
+    if (x_dgc) wrap_levels(thunk_csc) else wrap_levels(thunk_dense)
+  } else if (x_dgc && y_dgc) {
+    wrap_levels(thunk_csc)
+  } else if (!x_dgc && !y_dgc) {
+    wrap_levels(thunk_dense)
+  } else {
+    wrap_levels(thunk_spdem)
+  }
 }
-
-# #' Bicor-based graph construction
-# #' @param x numeric matrix (rows = observations, columns = items)
-# #' @param knn K nearest neighbors
-# #' @param k_expand expansion factor used by tgstat's graph builder
-# #' @param k_beta numeric (default 3); passed to tgstat if applicable
-# #' @param use_intersection_denominator logical; passed to bicor()
-# #' @return graph object created by tgstat
-# #' @export
-# bicor_graph <- function(
-#   x,
-#   knn,
-#   k_expand,
-#   k_beta = 3,
-#   use_intersection_denominator = FALSE
-# ) {
-#   if (missing(x) || missing(knn) || missing(k_expand)) {
-#     stop("Usage: bicor_graph(x, knn, k_expand, k_beta = 3)", call. = FALSE)
-#   }
-#   x <- .coerce_dense(x)
-#   S <- bicor(
-#     x,
-#     pairwise.complete.obs = TRUE,
-#     use_intersection_denominator = use_intersection_denominator
-#   )
-#   .Call(
-#     "tgs_cor_graph",
-#     S,
-#     as.integer(knn),
-#     as.integer(k_expand),
-#     as.numeric(k_beta),
-#     new.env(parent = parent.frame()),
-#     PACKAGE = "tgstat"
-#   )
-# }
-
-# # #' Bicor-based graph clustering
-# #' @param graph graph returned by bicor_graph()/tgs_graph()
-# #' @param min_cluster_size integer
-# #' @param cooling numeric; default 1.05
-# #' @param burn_in integer; default 10
-# #' @return clustering object returned by tgstat
-# #' @export
-# bicor_graph_cover <- function(
-#   graph,
-#   min_cluster_size,
-#   cooling = 1.05,
-#   burn_in = 10
-# ) {
-#   if (missing(graph) || missing(min_cluster_size)) {
-#     stop(
-#       "Usage: bicor_graph_cover(graph, min_cluster_size, cooling = 1.05, burn_in = 10)",
-#       call. = FALSE
-#     )
-#   }
-#   .Call(
-#     "tgs_graph2cluster",
-#     graph,
-#     as.integer(min_cluster_size),
-#     as.numeric(cooling),
-#     as.integer(burn_in),
-#     new.env(parent = parent.frame()),
-#     PACKAGE = "tgstat"
-#   )
-# }
-
-# #' Bicor-based graph clustering with resampling (ensemble)
-# #' @param graph graph returned by bicor_graph()/tgs_graph()
-# #' @param knn K used in the graph
-# #' @param min_cluster_size integer
-# #' @param cooling numeric; default 1.05
-# #' @param burn_in integer; default 10
-# #' @param p_resamp resampling proportion (0,1]
-# #' @param n_resamp number of resamples
-# #' @param method one of "hash","full","edges"
-# #' @return resampled clustering object returned by tgstat
-# #' @export
-# bicor_graph_cover_resample <- function(
-#   graph,
-#   knn,
-#   min_cluster_size,
-#   cooling = 1.05,
-#   burn_in = 10,
-#   p_resamp = 0.75,
-#   n_resamp = 500,
-#   method = c("hash", "full", "edges")
-# ) {
-#   if (missing(graph) || missing(knn) || missing(min_cluster_size)) {
-#     stop(
-#       "Usage: bicor_graph_cover_resample(graph, knn, min_cluster_size, cooling = 1.05, burn_in = 10, p_resamp = 0.75, n_resamp = 500)",
-#       call. = FALSE
-#     )
-#   }
-#   method <- match.arg(method)
-
-#   if (method == "hash") {
-#     .Call(
-#       "tgs_graph2cluster_multi_hash",
-#       graph,
-#       as.integer(knn),
-#       as.integer(min_cluster_size),
-#       as.numeric(cooling),
-#       as.integer(burn_in),
-#       as.numeric(p_resamp),
-#       as.integer(n_resamp),
-#       new.env(parent = parent.frame()),
-#       PACKAGE = "tgstat"
-#     )
-#   } else if (method == "full") {
-#     .Call(
-#       "tgs_graph2cluster_multi_full",
-#       graph,
-#       as.integer(knn),
-#       as.integer(min_cluster_size),
-#       as.numeric(cooling),
-#       as.integer(burn_in),
-#       as.numeric(p_resamp),
-#       as.integer(n_resamp),
-#       new.env(parent = parent.frame()),
-#       PACKAGE = "tgstat"
-#     )
-#   } else {
-#     # "edges"
-#     .Call(
-#       "tgs_graph2cluster_multi_edges",
-#       graph,
-#       as.integer(knn),
-#       as.integer(min_cluster_size),
-#       as.numeric(cooling),
-#       as.integer(burn_in),
-#       as.numeric(p_resamp),
-#       as.integer(n_resamp),
-#       new.env(parent = parent.frame()),
-#       PACKAGE = "tgstat"
-#     )
-#   }
-# }

@@ -1,1 +1,15 @@
+^.*\.Rproj$
+^\.Rproj\.user$
+^\.Rhistory$
+^\.RData$
 ^\.github$
+^\.git$
+^\.gitignore$
+^cran-comments\.md$
+^CRAN-SUBMISSION$
+^revdep$
+^.*\.tar\.gz$
+^.*\.Rcheck$
+^.*\.BiocCheck$
+^tools$
+^LICENSE$
